@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- AI Chat Session Views -->
+    <record id="view_ai_chat_session_tree" model="ir.ui.view">
+        <field name="name">ai.chat.session.tree</field>
+        <field name="model">ai.chat.session</field>
+        <field name="arch" type="xml">
+            <tree string="AI Chat Sessions">
+                <field name="name"/>
+                <field name="user_id"/>
+                <field name="message_count"/>
+                <field name="last_message_date"/>
+                <field name="create_date"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_ai_chat_session_form" model="ir.ui.view">
+        <field name="name">ai.chat.session.form</field>
+        <field name="model">ai.chat.session</field>
+        <field name="arch" type="xml">
+            <form string="AI Chat Session">
+                <header>
+                    <button name="action_archive" string="Archive" type="object" class="btn-secondary"/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="user_id"/>
+                        <field name="message_count"/>
+                        <field name="last_message_date"/>
+                        <field name="active"/>
+                    </group>
+                    <notebook>
+                        <page string="Messages">
+                            <field name="message_ids">
+                                <tree>
+                                    <field name="role"/>
+                                    <field name="content"/>
+                                    <field name="create_date"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_ai_chat_session_search" model="ir.ui.view">
+        <field name="name">ai.chat.session.search</field>
+        <field name="model">ai.chat.session</field>
+        <field name="arch" type="xml">
+            <search string="Search AI Chat Sessions">
+                <field name="name"/>
+                <field name="user_id"/>
+                <filter string="My Chats" name="my_chats" domain="[('user_id', '=', uid)]"/>
+                <filter string="Active" name="active" domain="[('active', '=', True)]"/>
+                <filter string="Archived" name="archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter string="User" name="group_user" context="{'group_by': 'user_id'}"/>
+                    <filter string="Creation Date" name="group_create_date" context="{'group_by': 'create_date'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- AI Chat Message Views -->
+    <record id="view_ai_chat_message_tree" model="ir.ui.view">
+        <field name="name">ai.chat.message.tree</field>
+        <field name="model">ai.chat.message</field>
+        <field name="arch" type="xml">
+            <tree string="AI Chat Messages">
+                <field name="session_id"/>
+                <field name="role"/>
+                <field name="content"/>
+                <field name="create_date"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_ai_chat_message_form" model="ir.ui.view">
+        <field name="name">ai.chat.message.form</field>
+        <field name="model">ai.chat.message</field>
+        <field name="arch" type="xml">
+            <form string="AI Chat Message">
+                <sheet>
+                    <group>
+                        <field name="session_id"/>
+                        <field name="role"/>
+                        <field name="create_date"/>
+                    </group>
+                    <group>
+                        <field name="content" widget="text"/>
+                    </group>
+                    <group string="Technical Info">
+                        <field name="tool_calls"/>
+                        <field name="tool_call_id"/>
+                        <field name="tokens_used"/>
+                        <field name="metadata"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Actions -->
+    <record id="action_ai_chat_session" model="ir.actions.act_window">
+        <field name="name">AI Chat Sessions</field>
+        <field name="res_model">ai.chat.session</field>
+        <field name="view_mode">tree,form</field>
+        <field name="context">{'search_default_my_chats': 1, 'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No chat sessions yet
+            </p>
+            <p>
+                Click the AI icon in the top menu to start chatting!
+            </p>
+        </field>
+    </record>
+
+    <record id="action_ai_chat_message" model="ir.actions.act_window">
+        <field name="name">AI Chat Messages</field>
+        <field name="res_model">ai.chat.message</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <!-- Menu Items -->
+    <menuitem id="menu_ai_chat_root"
+              name="AI Chat"
+              sequence="100"/>
+
+    <menuitem id="menu_ai_chat_sessions"
+              name="Chat Sessions"
+              parent="menu_ai_chat_root"
+              action="action_ai_chat_session"
+              sequence="10"/>
+
+    <menuitem id="menu_ai_chat_messages"
+              name="Messages"
+              parent="menu_ai_chat_root"
+              action="action_ai_chat_message"
+              sequence="20"/>
+
+</odoo>

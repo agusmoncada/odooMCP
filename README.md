@@ -1,0 +1,235 @@
+# Odoo AI Chat Assistant
+
+An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that integrates MCP (Model Context Protocol) server capabilities with OpenRouter AI provider.
+
+## Features
+
+- **AI Chat Interface**: Clean, modern chat interface accessible from anywhere in Odoo via the systray icon
+- **MCP Server Integration**: Built-in MCP server that exposes Odoo data and operations to the AI
+- **OpenRouter Integration**: Connect to multiple AI models through OpenRouter (GPT-4, Claude, LLaMA, etc.)
+- **Tool Calling**: AI can interact with Odoo data using MCP tools (search, read, create, update records)
+- **Session Management**: Create multiple chat sessions and switch between them
+- **Chat History**: All conversations are saved and can be reviewed later
+- **Configurable**: Extensive configuration options for AI behavior, model selection, and more
+
+## Installation
+
+### 1. Prerequisites
+
+- Odoo v16 Community Edition
+- Python 3.8+
+- `requests` Python library
+
+### 2. Install Dependencies
+
+```bash
+pip3 install requests
+```
+
+### 3. Install the Module
+
+1. Copy the `odoo_ai_chat` directory to your Odoo addons path
+2. Restart the Odoo server
+3. Update the Apps list (Apps > Update Apps List)
+4. Search for "AI Chat Assistant" and install it
+
+## Configuration
+
+### 1. Get OpenRouter API Key
+
+1. Visit [OpenRouter](https://openrouter.ai/)
+2. Create an account
+3. Go to [Keys](https://openrouter.ai/keys) and generate an API key
+
+### 2. Configure the Module
+
+1. Go to **Settings > General Settings**
+2. Scroll down to the **AI Chat** section
+3. Enter your OpenRouter API key
+4. Configure other settings:
+   - **AI Model**: Choose the model (e.g., `openai/gpt-3.5-turbo`, `anthropic/claude-3-sonnet`)
+   - **Temperature**: Control randomness (0-2, default 0.7)
+   - **Max Tokens**: Maximum response length (default 2000)
+   - **Enable MCP Tools**: Allow AI to interact with Odoo data (recommended)
+   - **System Prompt**: Customize the AI's behavior and personality
+5. Click **Save**
+
+## Usage
+
+### Starting a Chat
+
+1. Click the **robot icon** in the top menu bar
+2. A chat window will open
+3. Type your message and press Enter or click the send button
+4. The AI will respond to your queries
+
+### Managing Sessions
+
+- **New Chat**: Click the "New Chat" button to start a fresh conversation
+- **View Sessions**: Click the hamburger menu icon to see all your chat sessions
+- **Switch Sessions**: Click on any session to load its conversation history
+- **Delete Sessions**: Click the trash icon next to a session to delete it
+
+### AI Capabilities
+
+When MCP tools are enabled, the AI can:
+
+- **Search Records**: Find data across any Odoo model
+- **Read Records**: Get detailed information about specific records
+- **Create Records**: Create new records (with appropriate permissions)
+- **Update Records**: Modify existing records (with appropriate permissions)
+- **Get Model Info**: Learn about model structures and fields
+
+### Example Queries
+
+```
+"Show me the latest 5 customers"
+"What are the open sales orders?"
+"Create a new contact named John Doe with email john@example.com"
+"What fields are available in the res.partner model?"
+"Find all invoices from last month"
+```
+
+## MCP Server Features
+
+The integrated MCP server provides the following tools to the AI:
+
+### Available Tools
+
+1. **search_records**: Search for records in any Odoo model
+   - Parameters: model, domain, fields, limit
+
+2. **read_record**: Read a specific record
+   - Parameters: model, record_id, fields
+
+3. **create_record**: Create a new record
+   - Parameters: model, values
+
+4. **write_record**: Update an existing record
+   - Parameters: model, record_id, values
+
+5. **get_model_fields**: Get field information for a model
+   - Parameters: model
+
+## Available AI Models
+
+OpenRouter supports many AI models. Popular choices:
+
+- **OpenAI**: `openai/gpt-4`, `openai/gpt-3.5-turbo`
+- **Anthropic**: `anthropic/claude-3-opus`, `anthropic/claude-3-sonnet`
+- **Meta**: `meta-llama/llama-3-70b`, `meta-llama/llama-3-8b`
+- **Google**: `google/gemini-pro`
+- **Mistral**: `mistralai/mistral-medium`
+
+See [OpenRouter Models](https://openrouter.ai/models) for a complete list.
+
+## Security & Permissions
+
+- All chat sessions are user-specific (users can only see their own chats)
+- MCP tool operations respect Odoo's access rights and record rules
+- API keys are stored securely in Odoo's configuration parameters
+- All AI interactions are logged for audit purposes
+
+## Architecture
+
+### Backend Components
+
+- **Models**:
+  - `ai.chat.session`: Chat session management
+  - `ai.chat.message`: Individual messages
+  - `mcp.server.registry`: MCP server registry
+  - `res.config.settings`: Configuration
+
+- **Controllers**:
+  - `/ai_chat/send_message`: Send message to AI
+  - `/ai_chat/get_sessions`: Get user's sessions
+  - `/ai_chat/get_messages`: Get session messages
+  - `/ai_chat/new_session`: Create new session
+  - `/ai_chat/delete_session`: Delete session
+
+- **Services**:
+  - `OpenRouterProvider`: AI provider integration
+  - `MCPServer`: MCP server implementation
+
+### Frontend Components
+
+- **JavaScript Services**:
+  - `ai_chat`: Main chat service
+
+- **Components**:
+  - `AIChatSystrayItem`: Systray icon
+  - `AIChatWidget`: Main chat interface
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"OpenRouter API key not configured"**
+   - Make sure you've saved the API key in Settings > AI Chat
+
+2. **"AI service error"**
+   - Check your API key is valid
+   - Ensure you have credits on your OpenRouter account
+   - Verify your internet connection
+
+3. **Tool calls not working**
+   - Enable "MCP Tools" in settings
+   - Check user has proper access rights for the requested operations
+
+4. **Chat not appearing**
+   - Clear your browser cache
+   - Refresh the page
+   - Check JavaScript console for errors
+
+## Development
+
+### Directory Structure
+
+```
+odoo_ai_chat/
+├── __init__.py
+├── __manifest__.py
+├── controllers/
+│   ├── __init__.py
+│   └── main.py
+├── models/
+│   ├── __init__.py
+│   ├── ai_chat_message.py
+│   ├── ai_chat_session.py
+│   ├── ai_provider.py
+│   ├── mcp_server.py
+│   └── res_config_settings.py
+├── security/
+│   └── ir.model.access.csv
+├── views/
+│   ├── ai_chat_views.xml
+│   └── res_config_settings_views.xml
+└── static/
+    └── src/
+        ├── css/
+        │   └── ai_chat.css
+        ├── js/
+        │   ├── ai_chat_service.js
+        │   ├── ai_chat_widget.js
+        │   └── systray_item.js
+        └── xml/
+            └── ai_chat_templates.xml
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
+
+## License
+
+LGPL-3
+
+## Support
+
+For issues and questions, please contact your system administrator or the module maintainer.
+
+## Credits
+
+- Built for Odoo v16 Community Edition
+- Powered by [OpenRouter](https://openrouter.ai/)
+- Uses Model Context Protocol (MCP) for tool integration

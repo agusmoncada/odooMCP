@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Chat Assistant</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #875a7b;
+            border-bottom: 3px solid #875a7b;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #875a7b;
+            margin-top: 30px;
+        }
+        .feature {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #875a7b;
+            border-radius: 4px;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        .screenshot {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 AI Chat Assistant for Odoo v16</h1>
+
+    <p>
+        Transform your Odoo experience with an intelligent AI assistant that understands
+        your business and can interact with your data. Powered by OpenRouter and featuring
+        integrated MCP (Model Context Protocol) server capabilities.
+    </p>
+
+    <h2>✨ Key Features</h2>
+
+    <div class="feature">
+        <strong>🎯 Instant Access</strong><br>
+        Click the AI icon in your top menu bar to chat from anywhere in Odoo.
+        No need to switch contexts or open separate applications.
+    </div>
+
+    <div class="feature">
+        <strong>🔧 MCP Server Integration</strong><br>
+        Built-in Model Context Protocol server allows the AI to interact with your
+        Odoo data intelligently - search, read, create, and update records.
+    </div>
+
+    <div class="feature">
+        <strong>🌐 OpenRouter Powered</strong><br>
+        Connect to multiple AI models including GPT-4, Claude, LLaMA, and more
+        through a single OpenRouter integration.
+    </div>
+
+    <div class="feature">
+        <strong>💬 Session Management</strong><br>
+        Create multiple chat sessions, switch between conversations, and maintain
+        complete chat history for future reference.
+    </div>
+
+    <div class="feature">
+        <strong>⚙️ Highly Configurable</strong><br>
+        Customize AI behavior, select your preferred model, adjust creativity settings,
+        and define custom system prompts.
+    </div>
+
+    <div class="feature">
+        <strong>🔒 Secure & Permission-Based</strong><br>
+        All operations respect Odoo's security model. Users can only access and
+        modify data they have permissions for.
+    </div>
+
+    <h2>🚀 Quick Start</h2>
+
+    <ol>
+        <li>Install the module from Apps</li>
+        <li>Get an API key from <a href="https://openrouter.ai/" target="_blank">OpenRouter</a></li>
+        <li>Configure settings in Settings > General Settings > AI Chat</li>
+        <li>Click the robot icon in the top menu to start chatting!</li>
+    </ol>
+
+    <div class="highlight">
+        <strong>💡 Tip:</strong> Enable "MCP Tools" in settings to allow the AI to
+        interact with your Odoo data for more powerful assistance.
+    </div>
+
+    <h2>🎯 What Can It Do?</h2>
+
+    <p>When MCP tools are enabled, your AI assistant can:</p>
+
+    <ul>
+        <li>Search for customers, orders, invoices, and any other records</li>
+        <li>Retrieve detailed information about specific records</li>
+        <li>Create new contacts, leads, or other records</li>
+        <li>Update existing records with your permission</li>
+        <li>Explore model structures and available fields</li>
+        <li>Answer questions about your business data</li>
+    </ul>
+
+    <h2>💬 Example Conversations</h2>
+
+    <p><strong>You:</strong> "Show me the top 5 customers by sales"</p>
+    <p><strong>AI:</strong> <em>Searches your customer records and presents the results</em></p>
+
+    <p><strong>You:</strong> "Create a new contact for John Doe at Acme Corp"</p>
+    <p><strong>AI:</strong> <em>Creates the contact and confirms with details</em></p>
+
+    <p><strong>You:</strong> "What are my open sales orders?"</p>
+    <p><strong>AI:</strong> <em>Lists your current open orders with relevant details</em></p>
+
+    <h2>🎨 Beautiful Interface</h2>
+
+    <ul>
+        <li>Modern, responsive chat interface</li>
+        <li>Clean message bubbles with timestamps</li>
+        <li>Typing indicators for better UX</li>
+        <li>Session sidebar for easy navigation</li>
+        <li>Mobile-friendly design</li>
+    </ul>
+
+    <h2>🔧 Available AI Models</h2>
+
+    <p>Choose from a wide range of models through OpenRouter:</p>
+
+    <ul>
+        <li><strong>OpenAI:</strong> GPT-4, GPT-3.5 Turbo</li>
+        <li><strong>Anthropic:</strong> Claude 3 Opus, Sonnet, Haiku</li>
+        <li><strong>Meta:</strong> LLaMA 3 (70B, 8B)</li>
+        <li><strong>Google:</strong> Gemini Pro</li>
+        <li><strong>Mistral:</strong> Mistral Medium, Large</li>
+        <li>And many more!</li>
+    </ul>
+
+    <h2>📊 Use Cases</h2>
+
+    <ul>
+        <li><strong>Sales Teams:</strong> Quickly find customer information and order status</li>
+        <li><strong>Customer Support:</strong> Look up tickets and customer history</li>
+        <li><strong>Management:</strong> Get business insights and data analysis</li>
+        <li><strong>Data Entry:</strong> Create records through natural language</li>
+        <li><strong>Training:</strong> Help new users learn Odoo functionality</li>
+    </ul>
+
+    <h2>🛡️ Security & Privacy</h2>
+
+    <ul>
+        <li>All chats are private to each user</li>
+        <li>Respects Odoo's access rights and record rules</li>
+        <li>API keys stored securely in system parameters</li>
+        <li>No data sent to third parties except OpenRouter API</li>
+        <li>Complete audit trail of all AI interactions</li>
+    </ul>
+
+    <h2>📦 What's Included</h2>
+
+    <ul>
+        <li>Complete AI chat interface</li>
+        <li>MCP server implementation</li>
+        <li>OpenRouter integration</li>
+        <li>Session and message management</li>
+        <li>Configuration settings panel</li>
+        <li>Security and access control</li>
+        <li>Comprehensive documentation</li>
+    </ul>
+
+    <h2>💼 Support</h2>
+
+    <p>
+        For installation help, configuration questions, or technical support,
+        please refer to the included README.md or contact your system administrator.
+    </p>
+
+    <h2>📄 License</h2>
+
+    <p>LGPL-3</p>
+
+    <hr style="margin: 30px 0; border: none; border-top: 2px solid #875a7b;">
+
+    <p style="text-align: center; color: #666;">
+        Made with ❤️ for the Odoo Community<br>
+        <small>Compatible with Odoo v16 Community Edition</small>
+    </p>
+</body>
+</html>
