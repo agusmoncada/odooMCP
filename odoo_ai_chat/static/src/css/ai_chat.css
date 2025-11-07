@@ -327,6 +327,59 @@
     cursor: not-allowed;
 }
 
+/* File Upload Button */
+.o_ai_chat_attach_btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.o_ai_chat_attach_btn:hover:not(:disabled) {
+    background: #6c757d;
+    border-color: #6c757d;
+}
+
+/* Graph Container */
+.o_ai_chat_graph_container {
+    margin: 15px 0;
+    padding: 15px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.o_ai_chat_graph_canvas {
+    max-height: 400px;
+    width: 100% !important;
+    height: 350px !important;
+}
+
+/* PDF/Tool indicators */
+.o_ai_chat_tool_calls {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #e7f3ff;
+    border-left: 3px solid #0066cc;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.o_ai_chat_message_assistant .o_ai_chat_graph_container {
+    background: #f8f9fa;
+    border-color: #875a7b;
+}
+
+/* Loading state for file upload */
+.o_ai_chat_input button.o_ai_chat_attach_btn:disabled {
+    opacity: 0.6;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .o_ai_chat_widget {
@@ -337,5 +390,14 @@
 
     .o_ai_chat_message_content {
         max-width: 85%;
+    }
+
+    .o_ai_chat_graph_canvas {
+        max-height: 300px;
+        height: 250px !important;
+    }
+
+    .o_ai_chat_graph_container {
+        padding: 10px;
     }
 }

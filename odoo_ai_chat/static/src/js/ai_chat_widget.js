@@ -1,8 +1,9 @@
 /** @odoo-module **/
 
-import { Component, useState, useRef, onMounted } from "@odoo/owl";
+import { Component, useState, useRef, onMounted, onPatched } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
+import { ChartRenderer } from "./chart_renderer";
 
 /**
  * AI Chat Widget
@@ -20,9 +21,12 @@ export class AIChatWidget extends Component {
             inputMessage: "",
             loading: false,
             showSessions: false,
+            uploadingFile: false,
         });
 
         this.messagesEndRef = useRef("messagesEnd");
+        this.fileInputRef = useRef("fileInput");
+        this.charts = {};  // Store chart instances
 
         // Load sessions on mount
         onMounted(async () => {
@@ -41,12 +45,23 @@ export class AIChatWidget extends Component {
                 }
             });
         });
+
+        // Render charts after patching
+        onPatched(() => {
+            this.renderCharts();
+        });
     }
 
     willUnmount() {
         if (this.removeListener) {
             this.removeListener();
         }
+        // Destroy all charts
+        Object.values(this.charts).forEach(chart => {
+            if (chart && chart.destroy) {
+                chart.destroy();
+            }
+        });
     }
 
     /**
@@ -222,6 +237,138 @@ export class AIChatWidget extends Component {
         } else {
             return date.toLocaleDateString();
         }
+    }
+
+    /**
+     * Handle file attachment button click
+     */
+    onAttachFile() {
+        if (this.fileInputRef.el) {
+            this.fileInputRef.el.click();
+        }
+    }
+
+    /**
+     * Handle file selection
+     */
+    async onFileSelected(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        if (file.type !== 'application/pdf') {
+            this.notification.add("Please select a PDF file", {
+                type: "warning",
+            });
+            event.target.value = '';
+            return;
+        }
+
+        // Check file size (max 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+            this.notification.add("File size exceeds 10MB limit", {
+                type: "warning",
+            });
+            event.target.value = '';
+            return;
+        }
+
+        try {
+            this.state.uploadingFile = true;
+
+            // Upload file
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('session_id', this.state.currentSessionId || '');
+
+            const response = await fetch('/ai_chat/upload_pdf', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.notification.add(`PDF processed successfully: ${result.filename}`, {
+                    type: "success",
+                });
+
+                // Add a message about the uploaded file
+                this.state.inputMessage = `I've uploaded an invoice PDF "${result.filename}". Please analyze it and create a vendor bill.`;
+                await this.sendMessage();
+            } else {
+                this.notification.add(result.error || "Failed to process PDF", {
+                    type: "danger",
+                });
+            }
+        } catch (error) {
+            console.error("Error uploading PDF:", error);
+            this.notification.add("Failed to upload PDF file", {
+                type: "danger",
+            });
+        } finally {
+            this.state.uploadingFile = false;
+            event.target.value = '';  // Reset input
+        }
+    }
+
+    /**
+     * Check if message contains graph data
+     */
+    hasGraphData(message) {
+        if (!message.tool_calls) return false;
+
+        try {
+            const toolCalls = JSON.parse(message.tool_calls);
+            return toolCalls.some(tc => tc.name === 'generate_graph');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Extract graph data from message
+     */
+    getGraphData(message) {
+        // The graph data should be in the tool result
+        // For now, we'll need to parse it from the message content or tool_calls
+        // This will be populated by the backend when tool results are processed
+        return message.graph_data || null;
+    }
+
+    /**
+     * Render all charts in messages
+     */
+    renderCharts() {
+        this.state.messages.forEach((message, index) => {
+            if (message.graph_data && message.graph_data.type) {
+                const canvasId = `chart_${message.id || index}`;
+                const canvas = document.getElementById(canvasId);
+
+                if (canvas && !this.charts[canvasId]) {
+                    const renderer = new ChartRenderer(canvas, message.graph_data);
+                    const chart = renderer.render();
+                    if (chart) {
+                        this.charts[canvasId] = renderer;
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Get message type indicator
+     */
+    getMessageTypeIndicator(message) {
+        if (message.tool_calls) {
+            try {
+                const toolCalls = JSON.parse(message.tool_calls);
+                const toolNames = toolCalls.map(tc => tc.name).join(', ');
+                return `Used tools: ${toolNames}`;
+            } catch (e) {
+                return 'Used tools';
+            }
+        }
+        return null;
     }
 }
 

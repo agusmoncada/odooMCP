@@ -1,6 +1,6 @@
 # Odoo AI Chat Assistant
 
-An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that integrates MCP (Model Context Protocol) server capabilities with OpenRouter AI provider.
+An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that integrates MCP (Model Context Protocol) server capabilities with OpenRouter AI provider. Now with **graph generation** and **PDF invoice processing**!
 
 ## Features
 
@@ -8,6 +8,8 @@ An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that 
 - **MCP Server Integration**: Built-in MCP server that exposes Odoo data and operations to the AI
 - **OpenRouter Integration**: Connect to multiple AI models through OpenRouter (GPT-4, Claude, LLaMA, etc.)
 - **Tool Calling**: AI can interact with Odoo data using MCP tools (search, read, create, update records)
+- **📊 Graph Generation**: AI can create interactive charts and graphs from Odoo data (line, bar, pie, area, scatter, doughnut)
+- **📄 PDF Invoice Processing**: Upload PDF invoices and automatically create vendor bills with AI-powered data extraction
 - **Session Management**: Create multiple chat sessions and switch between them
 - **Chat History**: All conversations are saved and can be reviewed later
 - **Configurable**: Extensive configuration options for AI behavior, model selection, and more
@@ -23,7 +25,13 @@ An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that 
 ### 2. Install Dependencies
 
 ```bash
-pip3 install requests
+pip3 install requests pdfplumber pandas
+```
+
+Optional (for better PDF OCR):
+```bash
+pip3 install pytesseract
+apt-get install tesseract-ocr poppler-utils
 ```
 
 ### 3. Install the Module
@@ -79,9 +87,12 @@ When MCP tools are enabled, the AI can:
 - **Create Records**: Create new records (with appropriate permissions)
 - **Update Records**: Modify existing records (with appropriate permissions)
 - **Get Model Info**: Learn about model structures and fields
+- **📊 Generate Graphs**: Create interactive charts from your data
+- **📄 Process PDF Invoices**: Extract data and create vendor bills automatically
 
 ### Example Queries
 
+**General queries:**
 ```
 "Show me the latest 5 customers"
 "What are the open sales orders?"
@@ -89,6 +100,25 @@ When MCP tools are enabled, the AI can:
 "What fields are available in the res.partner model?"
 "Find all invoices from last month"
 ```
+
+**Graph generation:**
+```
+"Show me a bar chart of sales by month for the last quarter"
+"Create a pie chart of revenue by customer"
+"Generate a line graph showing order trends over the past year"
+"Show me total sales by salesperson in a bar chart"
+```
+
+**PDF invoice processing:**
+1. Click the paperclip icon (📎) in the chat input
+2. Select a PDF invoice file
+3. The AI will automatically:
+   - Extract invoice data (vendor, amounts, line items)
+   - Show you the extracted information
+   - Create a vendor bill in Odoo
+   - Attach the PDF to the bill
+
+Or simply say: "I uploaded an invoice, please process it and create a vendor bill"
 
 ## MCP Server Features
 
@@ -98,6 +128,15 @@ The integrated MCP server provides the following tools to the AI:
 
 1. **search_records**: Search for records in any Odoo model
    - Parameters: model, domain, fields, limit
+
+6. **generate_graph**: Create charts and graphs from Odoo data
+   - Parameters: graph_type, model, y_field, x_field, group_by, aggregation, date_range, title
+   - Supports: line, bar, pie, area, scatter, doughnut charts
+   - Aggregations: sum, avg, count, min, max
+
+7. **create_vendor_bill_from_pdf**: Create vendor bill from parsed PDF invoice data
+   - Parameters: invoice_data, pdf_content_b64, filename
+   - Automatically matches or creates vendors and products
 
 2. **read_record**: Read a specific record
    - Parameters: model, record_id, fields

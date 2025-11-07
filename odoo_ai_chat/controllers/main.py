@@ -2,6 +2,7 @@
 
 import json
 import logging
+import base64
 
 from odoo import http
 from odoo.http import request
@@ -118,19 +119,26 @@ class AIChatController(http.Controller):
 
             # Create assistant message
             if response.get('success'):
-                assistant_message = Message.create({
+                message_vals = {
                     'session_id': session.id,
                     'role': 'assistant',
                     'content': response.get('message', ''),
                     'tool_calls': json.dumps(response.get('tool_calls', [])) if response.get('tool_calls') else False
-                })
+                }
+
+                # Store graph data in metadata if present
+                if response.get('graph_data'):
+                    message_vals['metadata'] = json.dumps({'graph_data': response.get('graph_data')})
+
+                assistant_message = Message.create(message_vals)
 
                 return {
                     'success': True,
                     'session_id': session.id,
                     'message': response.get('message', ''),
                     'message_id': assistant_message.id,
-                    'tool_calls': response.get('tool_calls', [])
+                    'tool_calls': response.get('tool_calls', []),
+                    'graph_data': response.get('graph_data')
                 }
             else:
                 return {
@@ -154,6 +162,8 @@ class AIChatController(http.Controller):
             Message = http.request.env['ai.chat.message']
             mcp_registry = http.request.env['mcp.server.registry']
 
+            graph_data = None
+
             # Execute each tool call
             for tool_call in tool_calls:
                 tool_name = tool_call['name']
@@ -164,6 +174,10 @@ class AIChatController(http.Controller):
 
                 # Execute tool via MCP
                 tool_result = mcp_registry.call_tool(tool_name, tool_args)
+
+                # Extract graph data if this was a generate_graph call
+                if tool_name == 'generate_graph' and tool_result.get('success'):
+                    graph_data = tool_result.get('graph_data')
 
                 # Add tool result to messages
                 current_messages.append({
@@ -178,7 +192,8 @@ class AIChatController(http.Controller):
                     'session_id': session.id,
                     'role': 'tool',
                     'content': json.dumps(tool_result),
-                    'tool_call_id': tool_call_id
+                    'tool_call_id': tool_call_id,
+                    'metadata': json.dumps({'graph_data': graph_data}) if graph_data else None
                 })
 
             # Get final response from AI after tool execution
@@ -194,7 +209,8 @@ class AIChatController(http.Controller):
             return {
                 'success': True,
                 'message': final_message,
-                'tool_calls': tool_calls
+                'tool_calls': tool_calls,
+                'graph_data': graph_data
             }
 
         except Exception as e:
@@ -242,13 +258,26 @@ class AIChatController(http.Controller):
             if not session.exists() or session.user_id != request.env.user:
                 return {'error': 'Invalid session'}
 
-            messages = [{
-                'id': m.id,
-                'role': m.role,
-                'content': m.content,
-                'create_date': m.create_date.isoformat(),
-                'tool_calls': m.tool_calls
-            } for m in session.message_ids.sorted('create_date')]
+            messages = []
+            for m in session.message_ids.sorted('create_date'):
+                msg_data = {
+                    'id': m.id,
+                    'role': m.role,
+                    'content': m.content,
+                    'create_date': m.create_date.isoformat(),
+                    'tool_calls': m.tool_calls
+                }
+
+                # Extract graph_data from metadata if present
+                if m.metadata:
+                    try:
+                        metadata = json.loads(m.metadata)
+                        if metadata.get('graph_data'):
+                            msg_data['graph_data'] = metadata['graph_data']
+                    except json.JSONDecodeError:
+                        pass
+
+                messages.append(msg_data)
 
             return {
                 'success': True,
@@ -297,4 +326,115 @@ class AIChatController(http.Controller):
             }
         except Exception as e:
             _logger.exception("Error in new_session")
+            return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/upload_pdf', type='http', auth='user', methods=['POST'], csrf=False)
+    def upload_pdf(self, **kwargs):
+        """Handle PDF file upload and processing"""
+        try:
+            file = request.httprequest.files.get('file')
+            session_id = request.params.get('session_id')
+
+            if not file:
+                return request.make_json_response({
+                    'success': False,
+                    'error': 'No file provided'
+                })
+
+            # Read file content
+            pdf_content = file.read()
+            filename = file.filename
+
+            # Validate file type
+            if not filename.lower().endswith('.pdf'):
+                return request.make_json_response({
+                    'success': False,
+                    'error': 'Only PDF files are supported'
+                })
+
+            # Validate file size (max 10MB)
+            max_size = 10 * 1024 * 1024  # 10MB
+            if len(pdf_content) > max_size:
+                return request.make_json_response({
+                    'success': False,
+                    'error': 'File size exceeds 10MB limit'
+                })
+
+            # Process PDF
+            from ..models.pdf_processor import PDFInvoiceProcessor
+            processor = PDFInvoiceProcessor(request.env)
+            result = processor.process_pdf(pdf_content, filename)
+
+            if result['success']:
+                # Store PDF as attachment for later use
+                Attachment = request.env['ir.attachment']
+                pdf_b64 = base64.b64encode(pdf_content).decode('utf-8')
+
+                attachment = Attachment.create({
+                    'name': filename,
+                    'datas': pdf_b64,
+                    'res_model': 'ai.chat.session',
+                    'res_id': int(session_id) if session_id else False,
+                    'mimetype': 'application/pdf',
+                    'description': 'Uploaded invoice PDF for processing'
+                })
+
+                return request.make_json_response({
+                    'success': True,
+                    'attachment_id': attachment.id,
+                    'filename': filename,
+                    'invoice_data': result['data'],
+                    'raw_text_preview': result.get('raw_text', '')[:200]
+                })
+            else:
+                return request.make_json_response(result)
+
+        except Exception as e:
+            _logger.exception("Error uploading PDF")
+            return request.make_json_response({
+                'success': False,
+                'error': str(e)
+            })
+
+    @http.route('/ai_chat/process_invoice', type='json', auth='user')
+    def process_invoice(self, attachment_id=None, **kwargs):
+        """Process uploaded PDF and create vendor bill"""
+        try:
+            if not attachment_id:
+                return {'success': False, 'error': 'Attachment ID is required'}
+
+            # Get attachment
+            Attachment = request.env['ir.attachment']
+            attachment = Attachment.browse(attachment_id)
+
+            if not attachment.exists():
+                return {'success': False, 'error': 'Attachment not found'}
+
+            # Decode PDF content
+            pdf_content = base64.b64decode(attachment.datas)
+
+            # Process PDF
+            from ..models.pdf_processor import PDFInvoiceProcessor
+            processor = PDFInvoiceProcessor(request.env)
+
+            result = processor.process_pdf(pdf_content, attachment.name)
+
+            if not result['success']:
+                return result
+
+            # Create vendor bill
+            invoice_result = processor.create_vendor_bill(
+                invoice_data=result['data'],
+                pdf_content_b64=attachment.datas,
+                filename=attachment.name
+            )
+
+            if invoice_result['success']:
+                # Delete temporary attachment
+                attachment.unlink()
+
+            return invoice_result
+
+        except Exception as e:
+            _logger.exception("Error processing invoice")
             return {'success': False, 'error': str(e)}
