@@ -1,8 +1,11 @@
-# ⚠️  PINNED for Odoo v16 Compatibility
-# See /requirements.txt in repo root for details
+# ⚠️  TESTED and WORKING on Odoo v16
+# See /requirements.txt in repo root for detailed installation guide
 
-# IMPORTANT: Newer versions will break Odoo v16
+# IMPORTANT: These versions are tested in production
+# Install cryptography/pyOpenSSL upgrades first (see root requirements.txt)
 pdfplumber==0.9.0
-pandas>=1.5.0,<2.0.0
+pandas==1.3.5
+numpy==1.24.3
 python-magic>=0.4.27,<1.0.0
 Pillow==9.5.0
+pytesseract==0.3.10

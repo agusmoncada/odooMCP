@@ -1,8 +1,23 @@
 # Odoo AI Chat Assistant - Python Dependencies
 # ============================================
-# ⚠️  IMPORTANT: These versions are pinned for Odoo v16 compatibility
-# ⚠️  DO NOT upgrade without testing - newer versions may break Odoo!
+# ⚠️  IMPORTANT: These versions are tested and compatible with Odoo v16
+# ⚠️  Two approaches available - see below
 #
+# APPROACH A: Upgrade cryptography + pyOpenSSL (TESTED ✅ - WORKING)
+# ===================================================================
+# This approach upgrades both cryptography and pyOpenSSL to compatible newer versions:
+#   - cryptography: 41.0.7 (upgraded from Odoo's 3.3.2)
+#   - pyOpenSSL: 24.0.0 (upgraded from Odoo's 20.0.1)
+#   - urllib3: 2.5.0 (upgraded from Odoo's 1.26.5)
+#
+# Tested and confirmed working on production instance!
+#
+# Install with:
+#   pip3 install cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
+#   pip3 install -r requirements.txt
+#
+# APPROACH B: Keep old versions (UNTESTED - conservative)
+# ========================================================
 # Odoo v16 ships with:
 #   - cryptography==3.3.2
 #   - pyOpenSSL==20.0.1
@@ -10,35 +25,34 @@
 # Newer versions of Pillow/pdfplumber require cryptography>=42.0.0
 # which is INCOMPATIBLE with pyOpenSSL 20.0.1 and will break Odoo.
 #
-# Install with: pip3 install -r requirements.txt --no-deps
-# Then manually verify no conflicts occurred.
+# Install with:
+#   pip3 install -r requirements.txt --no-deps
 
 # Core Dependencies
 # -----------------
-# HTTP client for OpenRouter API calls (already in Odoo)
+# HTTP client for OpenRouter API calls
 requests>=2.28.0,<3.0.0
 
-# PDF Processing (PINNED - do not upgrade)
-# -----------------------------------------
+# PDF Processing (Approach A: 0.9.0 / Approach B: 0.9.0)
+# --------------------------------------------------------
 # PDF parsing and text extraction for invoice processing
-# Version 0.9.0 uses cryptography<42 (compatible with Odoo v16)
 pdfplumber==0.9.0
 
-# Data Processing (PINNED - do not upgrade)
-# ------------------------------------------
+# Data Processing (memory-optimized)
+# -----------------------------------
 # Data manipulation and aggregation for graph generation
-# Pinned to <2.0.0 for compatibility with Odoo v16
-pandas>=1.5.0,<2.0.0
+# Older versions use less memory (important for Docker containers)
+pandas==1.3.5
+numpy==1.24.3
 
 # File Type Detection
 # -------------------
 # MIME type detection for uploaded files
 python-magic>=0.4.27,<1.0.0
 
-# Image Processing (PINNED - do not upgrade)
-# -------------------------------------------
+# Image Processing (compatible version)
+# --------------------------------------
 # Image handling and manipulation
-# Version 9.5.0 is the last compatible with Odoo v16's cryptography
 Pillow==9.5.0
 
 # Optional Dependencies
@@ -94,13 +108,19 @@ Pillow==9.5.0
 # Then pip upgraded cryptography! Fix:
 #   pip3 install --force-reinstall cryptography==3.3.2 pyOpenSSL==20.0.1
 #
-# Odoo v16 Compatibility Matrix
-# ==============================
-# Package      | Odoo v16 | This Addon | Status
-# -------------|----------|------------|--------
-# cryptography | 3.3.2    | 3.3.2      | ✅ OK
-# pyOpenSSL    | 20.0.1   | 20.0.1     | ✅ OK
-# pdfplumber   | -        | 0.9.0      | ✅ OK
-# Pillow       | -        | 9.5.0      | ✅ OK
-# pandas       | -        | 1.5.x      | ✅ OK
-# requests     | 2.28.x   | 2.28.x     | ✅ OK
+# Odoo v16 Compatibility Matrix (Approach A - Tested & Working ✅)
+# ================================================================
+# Package      | Odoo v16 Default | Production Tested | Status
+# -------------|------------------|-------------------|--------
+# cryptography | 3.3.2            | 41.0.7            | ✅ OK
+# pyOpenSSL    | 20.0.1           | 24.0.0            | ✅ OK
+# urllib3      | 1.26.5           | 2.5.0             | ✅ OK
+# pdfplumber   | -                | 0.9.0             | ✅ OK
+# Pillow       | -                | 9.5.0             | ✅ OK
+# pandas       | -                | 1.3.5             | ✅ OK
+# numpy        | -                | 1.24.3            | ✅ OK
+# requests     | 2.28.x           | 2.32.5            | ✅ OK
+# pytesseract  | -                | 0.3.10            | ✅ OK
+#
+# ✅ This configuration is TESTED and WORKING on production instance!
+# Memory-optimized versions (pandas 1.3.5, numpy 1.24.3) for Docker.

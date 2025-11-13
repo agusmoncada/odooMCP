@@ -16,13 +16,14 @@ An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that 
 
 ## Installation
 
-### ⚠️ IMPORTANT: Dependency Warning
+### ✅ PRODUCTION-TESTED Installation
 
-**This addon has specific version requirements to avoid breaking Odoo v16.**
+**This addon uses a tested configuration that works with Odoo v16.**
 
-Newer versions of `pdfplumber` and `Pillow` require `cryptography>=42.0.0`, which is **incompatible** with Odoo v16's `pyOpenSSL 20.0.1` and will break your Odoo instance with SSL errors.
-
-**We have pinned safe versions in `requirements.txt`. DO NOT upgrade them!**
+We upgrade both `cryptography` and `pyOpenSSL` to compatible newer versions (tested in production):
+- `cryptography: 41.0.7` (from Odoo's default 3.3.2)
+- `pyOpenSSL: 24.0.0` (from Odoo's default 20.0.1)
+- `urllib3: 2.5.0` (from Odoo's default 1.26.5)
 
 ### 1. Prerequisites
 
@@ -30,36 +31,45 @@ Newer versions of `pdfplumber` and `Pillow` require `cryptography>=42.0.0`, whic
 - Python 3.8+
 - **Backup your Odoo instance before installing!**
 
-### 2. Install Dependencies (SAFE METHOD)
+### 2. Install Dependencies (PRODUCTION-TESTED ✅)
 
-**Option A: Using requirements.txt (Recommended)**
+**Recommended: Production Configuration (Tested & Working)**
 ```bash
-# Install with pinned compatible versions
+# Step 1: Upgrade cryptography stack (required for addon dependencies)
+pip3 install cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
+
+# Step 2: Install addon dependencies
+pip3 install -r requirements.txt
+
+# Step 3: Verify installation
+pip3 show cryptography pyOpenSSL urllib3
+# cryptography: 41.0.7 ✅
+# pyOpenSSL: 24.0.0 ✅
+# urllib3: 2.5.0 ✅
+```
+
+**Alternative: Conservative Approach (Untested)**
+```bash
+# Try keeping Odoo's default cryptography 3.3.2
 pip3 install -r requirements.txt --no-deps
 
 # Verify cryptography wasn't upgraded
 pip3 show cryptography | grep Version
-# Should show: Version: 3.3.2 (NOT 42.x or higher!)
+# Should show: Version: 3.3.2
 ```
 
-**Option B: Manual install**
-```bash
-# Install exact compatible versions
-pip3 install pdfplumber==0.9.0 pandas==1.5.3 Pillow==9.5.0 python-magic==0.4.27
-```
-
-**Option C: Virtual Environment (Best Practice)**
+**Best Practice: Virtual Environment**
 ```bash
 # Create isolated environment
 python3 -m venv odoo_ai_chat_venv
 source odoo_ai_chat_venv/bin/activate
+pip install cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
 pip install -r requirements.txt
 ```
 
-Optional (for better PDF OCR):
+**System packages for OCR (optional):**
 ```bash
-pip3 install pytesseract==0.3.10
-apt-get install tesseract-ocr poppler-utils
+apt-get install tesseract-ocr poppler-utils  # Debian/Ubuntu
 ```
 
 ### 3. Install the Module
@@ -74,14 +84,28 @@ apt-get install tesseract-ocr poppler-utils
 **If Odoo breaks after installation with SSL/cryptography errors:**
 
 ```bash
-# Emergency fix - restore compatible versions
+# Option 1: Use production-tested versions (recommended)
+pip3 install --force-reinstall cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
+# Restart Odoo
+
+# Option 2: Revert to Odoo defaults (if Option 1 fails)
 pip3 install --force-reinstall cryptography==3.3.2 pyOpenSSL==20.0.1
 # Restart Odoo
 ```
 
 **Error:** `AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'`
-- **Cause:** pip upgraded cryptography to version >=42.0.0
-- **Fix:** Run the emergency fix above
+- **Cause:** pip upgraded cryptography to version >=42.0.0 which is incompatible
+- **Fix:** Use Option 1 above (production-tested versions)
+
+**Production-Tested Package Versions:**
+- ✅ cryptography: 41.0.7
+- ✅ pyOpenSSL: 24.0.0
+- ✅ urllib3: 2.5.0
+- ✅ pdfplumber: 0.9.0
+- ✅ pandas: 1.3.5
+- ✅ numpy: 1.24.3
+- ✅ Pillow: 9.5.0
+- ✅ pytesseract: 0.3.10
 
 ## Configuration
 
