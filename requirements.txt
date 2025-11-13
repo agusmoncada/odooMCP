@@ -1,0 +1,49 @@
+# Odoo AI Chat Assistant - Python Dependencies
+# ============================================
+# Install with: pip3 install -r requirements.txt
+
+# Core Dependencies
+# -----------------
+# HTTP client for OpenRouter API calls
+requests>=2.31.0
+
+# PDF Processing
+# --------------
+# PDF parsing and text extraction for invoice processing
+pdfplumber>=0.10.0
+
+# Data Processing
+# ---------------
+# Data manipulation and aggregation for graph generation
+pandas>=1.5.0
+
+# File Type Detection
+# -------------------
+# MIME type detection for uploaded files
+python-magic>=0.4.27
+
+# Image Processing
+# ----------------
+# Image handling and manipulation
+Pillow>=10.0.0
+
+# Optional Dependencies
+# ---------------------
+# Uncomment if you need OCR capabilities for scanned PDFs:
+pytesseract>=0.3.10
+
+# System Dependencies (install separately with apt/yum):
+# -------------------------------------------------------
+# For OCR support (optional):
+#   - tesseract-ocr
+#   - poppler-utils
+#
+# Install with:
+#   apt-get install tesseract-ocr poppler-utils  # Debian/Ubuntu
+#   yum install tesseract poppler-utils          # RHEL/CentOS
+
+# Odoo Requirements
+# -----------------
+# Note: This addon requires Odoo v16 Community Edition
+# Odoo itself has its own dependencies which should be
+# installed separately following Odoo's installation guide.

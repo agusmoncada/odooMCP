@@ -11,9 +11,11 @@
     background-color: rgba(0, 0, 0, 0.1);
 }
 
-.o_ai_chat_systray i {
-    font-size: 18px;
+.o_ai_chat_systray i,
+.o_ai_chat_systray .o_ai_chat_icon {
+    font-size: 20px;
     color: #875a7b;
+    line-height: 1;
 }
 
 /* Main Chat Widget */
