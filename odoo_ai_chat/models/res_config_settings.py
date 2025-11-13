@@ -45,7 +45,7 @@ class ResConfigSettings(models.TransientModel):
     )
 
     # System Prompt
-    ai_system_prompt = fields.Text(
+    ai_system_prompt = fields.Char(
         string='System Prompt',
         config_parameter='odoo_ai_chat.system_prompt',
         default='''You are a helpful AI assistant integrated into Odoo ERP system.
