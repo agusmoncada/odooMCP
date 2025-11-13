@@ -1,6 +1,13 @@
 """Configuration Settings for AI Chat"""
 
-from odoo import api, fields, models
+import json
+import logging
+import requests
+
+from odoo import api, fields, models, _
+from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class ResConfigSettings(models.TransientModel):
@@ -15,11 +22,18 @@ class ResConfigSettings(models.TransientModel):
         help='Your OpenRouter API key from https://openrouter.ai/keys'
     )
 
-    openrouter_model = fields.Char(
+    openrouter_model = fields.Selection(
+        selection='_get_available_models',
         string='AI Model',
         config_parameter='odoo_ai_chat.openrouter_model',
         default='openai/gpt-3.5-turbo',
-        help='Model to use for AI responses (e.g., openai/gpt-3.5-turbo, anthropic/claude-3-sonnet)'
+        help='Model to use for AI responses'
+    )
+
+    openrouter_models_last_update = fields.Datetime(
+        string='Models Last Updated',
+        compute='_compute_models_last_update',
+        help='Last time the model list was fetched from OpenRouter'
     )
 
     openrouter_temperature = fields.Float(
@@ -71,6 +85,114 @@ within an enterprise resource planning system.''',
         default='Odoo AI Chat',
         help='Your site name for OpenRouter attribution'
     )
+
+    @api.model
+    def _get_available_models(self):
+        """Get list of available models from cache or default list"""
+        ICP = self.env['ir.config_parameter'].sudo()
+        cached_models = ICP.get_param('odoo_ai_chat.cached_models', '[]')
+
+        try:
+            models_data = json.loads(cached_models)
+            if models_data:
+                # Return cached models
+                return [(model['id'], model['name']) for model in models_data]
+        except (json.JSONDecodeError, KeyError):
+            _logger.warning("Failed to parse cached models")
+
+        # Return default popular models if cache is empty
+        return [
+            ('openai/gpt-4', 'OpenAI: GPT-4'),
+            ('openai/gpt-4-turbo', 'OpenAI: GPT-4 Turbo'),
+            ('openai/gpt-3.5-turbo', 'OpenAI: GPT-3.5 Turbo'),
+            ('anthropic/claude-3-opus', 'Anthropic: Claude 3 Opus'),
+            ('anthropic/claude-3-sonnet', 'Anthropic: Claude 3 Sonnet'),
+            ('anthropic/claude-3-haiku', 'Anthropic: Claude 3 Haiku'),
+            ('google/gemini-pro', 'Google: Gemini Pro'),
+            ('meta-llama/llama-3-70b-instruct', 'Meta: Llama 3 70B'),
+            ('mistralai/mistral-large', 'Mistral: Large'),
+        ]
+
+    @api.depends('openrouter_api_key')
+    def _compute_models_last_update(self):
+        """Compute when models were last updated"""
+        ICP = self.env['ir.config_parameter'].sudo()
+        last_update = ICP.get_param('odoo_ai_chat.models_last_update', False)
+
+        for record in self:
+            if last_update:
+                record.openrouter_models_last_update = last_update
+            else:
+                record.openrouter_models_last_update = False
+
+    def action_refresh_models(self):
+        """Fetch latest models from OpenRouter API"""
+        self.ensure_one()
+
+        if not self.openrouter_api_key:
+            raise UserError(_("Please configure your OpenRouter API key first."))
+
+        try:
+            # Fetch models from OpenRouter API
+            url = "https://openrouter.ai/api/v1/models"
+            headers = {
+                "Authorization": f"Bearer {self.openrouter_api_key}",
+            }
+
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            models_list = data.get('data', [])
+
+            if not models_list:
+                raise UserError(_("No models returned from OpenRouter API."))
+
+            # Cache models with id and name
+            cached_models = []
+            for model in models_list:
+                model_id = model.get('id', '')
+                model_name = model.get('name', model_id)
+
+                # Create a friendly display name
+                if model_name == model_id:
+                    # If name equals id, try to make it more readable
+                    parts = model_id.split('/')
+                    if len(parts) == 2:
+                        provider = parts[0].replace('-', ' ').title()
+                        model_part = parts[1].replace('-', ' ').title()
+                        model_name = f"{provider}: {model_part}"
+
+                cached_models.append({
+                    'id': model_id,
+                    'name': model_name,
+                })
+
+            # Sort by name
+            cached_models.sort(key=lambda x: x['name'])
+
+            # Store in config parameters
+            ICP = self.env['ir.config_parameter'].sudo()
+            ICP.set_param('odoo_ai_chat.cached_models', json.dumps(cached_models))
+            ICP.set_param('odoo_ai_chat.models_last_update', fields.Datetime.now())
+
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': _('Success'),
+                    'message': _('Successfully fetched %d models from OpenRouter.') % len(cached_models),
+                    'type': 'success',
+                    'sticky': False,
+                }
+            }
+
+        except requests.exceptions.RequestException as e:
+            _logger.error("Failed to fetch models from OpenRouter: %s", str(e))
+            raise UserError(_("Failed to fetch models from OpenRouter: %s") % str(e))
+        except Exception as e:
+            _logger.error("Error processing OpenRouter models: %s", str(e))
+            raise UserError(_("Error processing models: %s") % str(e))
 
     @api.model
     def get_ai_config(self):

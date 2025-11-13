@@ -16,21 +16,49 @@ An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that 
 
 ## Installation
 
+### ⚠️ IMPORTANT: Dependency Warning
+
+**This addon has specific version requirements to avoid breaking Odoo v16.**
+
+Newer versions of `pdfplumber` and `Pillow` require `cryptography>=42.0.0`, which is **incompatible** with Odoo v16's `pyOpenSSL 20.0.1` and will break your Odoo instance with SSL errors.
+
+**We have pinned safe versions in `requirements.txt`. DO NOT upgrade them!**
+
 ### 1. Prerequisites
 
 - Odoo v16 Community Edition
 - Python 3.8+
-- `requests` Python library
+- **Backup your Odoo instance before installing!**
 
-### 2. Install Dependencies
+### 2. Install Dependencies (SAFE METHOD)
 
+**Option A: Using requirements.txt (Recommended)**
 ```bash
-pip3 install requests pdfplumber pandas
+# Install with pinned compatible versions
+pip3 install -r requirements.txt --no-deps
+
+# Verify cryptography wasn't upgraded
+pip3 show cryptography | grep Version
+# Should show: Version: 3.3.2 (NOT 42.x or higher!)
+```
+
+**Option B: Manual install**
+```bash
+# Install exact compatible versions
+pip3 install pdfplumber==0.9.0 pandas==1.5.3 Pillow==9.5.0 python-magic==0.4.27
+```
+
+**Option C: Virtual Environment (Best Practice)**
+```bash
+# Create isolated environment
+python3 -m venv odoo_ai_chat_venv
+source odoo_ai_chat_venv/bin/activate
+pip install -r requirements.txt
 ```
 
 Optional (for better PDF OCR):
 ```bash
-pip3 install pytesseract
+pip3 install pytesseract==0.3.10
 apt-get install tesseract-ocr poppler-utils
 ```
 
@@ -40,6 +68,20 @@ apt-get install tesseract-ocr poppler-utils
 2. Restart the Odoo server
 3. Update the Apps list (Apps > Update Apps List)
 4. Search for "AI Chat Assistant" and install it
+
+### 🚨 Troubleshooting
+
+**If Odoo breaks after installation with SSL/cryptography errors:**
+
+```bash
+# Emergency fix - restore compatible versions
+pip3 install --force-reinstall cryptography==3.3.2 pyOpenSSL==20.0.1
+# Restart Odoo
+```
+
+**Error:** `AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'`
+- **Cause:** pip upgraded cryptography to version >=42.0.0
+- **Fix:** Run the emergency fix above
 
 ## Configuration
 

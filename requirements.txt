@@ -1,36 +1,50 @@
 # Odoo AI Chat Assistant - Python Dependencies
 # ============================================
-# Install with: pip3 install -r requirements.txt
+# ⚠️  IMPORTANT: These versions are pinned for Odoo v16 compatibility
+# ⚠️  DO NOT upgrade without testing - newer versions may break Odoo!
+#
+# Odoo v16 ships with:
+#   - cryptography==3.3.2
+#   - pyOpenSSL==20.0.1
+#
+# Newer versions of Pillow/pdfplumber require cryptography>=42.0.0
+# which is INCOMPATIBLE with pyOpenSSL 20.0.1 and will break Odoo.
+#
+# Install with: pip3 install -r requirements.txt --no-deps
+# Then manually verify no conflicts occurred.
 
 # Core Dependencies
 # -----------------
-# HTTP client for OpenRouter API calls
-requests>=2.31.0
+# HTTP client for OpenRouter API calls (already in Odoo)
+requests>=2.28.0,<3.0.0
 
-# PDF Processing
-# --------------
+# PDF Processing (PINNED - do not upgrade)
+# -----------------------------------------
 # PDF parsing and text extraction for invoice processing
-pdfplumber>=0.10.0
+# Version 0.9.0 uses cryptography<42 (compatible with Odoo v16)
+pdfplumber==0.9.0
 
-# Data Processing
-# ---------------
+# Data Processing (PINNED - do not upgrade)
+# ------------------------------------------
 # Data manipulation and aggregation for graph generation
-pandas>=1.5.0
+# Pinned to <2.0.0 for compatibility with Odoo v16
+pandas>=1.5.0,<2.0.0
 
 # File Type Detection
 # -------------------
 # MIME type detection for uploaded files
-python-magic>=0.4.27
+python-magic>=0.4.27,<1.0.0
 
-# Image Processing
-# ----------------
+# Image Processing (PINNED - do not upgrade)
+# -------------------------------------------
 # Image handling and manipulation
-Pillow>=10.0.0
+# Version 9.5.0 is the last compatible with Odoo v16's cryptography
+Pillow==9.5.0
 
 # Optional Dependencies
 # ---------------------
 # Uncomment if you need OCR capabilities for scanned PDFs:
-pytesseract>=0.3.10
+# pytesseract>=0.3.10
 
 # System Dependencies (install separately with apt/yum):
 # -------------------------------------------------------
@@ -42,8 +56,51 @@ pytesseract>=0.3.10
 #   apt-get install tesseract-ocr poppler-utils  # Debian/Ubuntu
 #   yum install tesseract poppler-utils          # RHEL/CentOS
 
-# Odoo Requirements
-# -----------------
-# Note: This addon requires Odoo v16 Community Edition
-# Odoo itself has its own dependencies which should be
-# installed separately following Odoo's installation guide.
+# ============================================
+# SAFE INSTALLATION GUIDE
+# ============================================
+#
+# METHOD 1: Safe Install (Recommended)
+# -------------------------------------
+# 1. Backup your Odoo instance first!
+# 2. Install with --no-deps to avoid automatic upgrades:
+#    pip3 install -r requirements.txt --no-deps
+# 3. Verify Odoo still works after installation
+# 4. Check cryptography version hasn't changed:
+#    pip3 show cryptography | grep Version
+#    Should show: Version: 3.3.2
+#
+# METHOD 2: Virtual Environment (Best Practice)
+# ----------------------------------------------
+# Use a separate venv for addon dependencies:
+#    python3 -m venv odoo_ai_chat_venv
+#    source odoo_ai_chat_venv/bin/activate
+#    pip install -r requirements.txt
+#
+# Then modify your addon to use the venv's packages.
+#
+# METHOD 3: Docker Sidecar (Production)
+# --------------------------------------
+# Run addon dependencies in a separate container
+# and communicate via API to avoid conflicts.
+#
+# ⚠️  WARNING SIGNS OF TROUBLE
+# ============================
+# If after installation you see:
+#   - "AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'"
+#   - SSL/TLS errors in Odoo
+#   - Odoo won't start
+#
+# Then pip upgraded cryptography! Fix:
+#   pip3 install --force-reinstall cryptography==3.3.2 pyOpenSSL==20.0.1
+#
+# Odoo v16 Compatibility Matrix
+# ==============================
+# Package      | Odoo v16 | This Addon | Status
+# -------------|----------|------------|--------
+# cryptography | 3.3.2    | 3.3.2      | ✅ OK
+# pyOpenSSL    | 20.0.1   | 20.0.1     | ✅ OK
+# pdfplumber   | -        | 0.9.0      | ✅ OK
+# Pillow       | -        | 9.5.0      | ✅ OK
+# pandas       | -        | 1.5.x      | ✅ OK
+# requests     | 2.28.x   | 2.28.x     | ✅ OK
