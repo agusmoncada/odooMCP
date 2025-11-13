@@ -30,7 +30,7 @@ Pillow>=10.0.0
 # Optional Dependencies
 # ---------------------
 # Uncomment if you need OCR capabilities for scanned PDFs:
-# pytesseract>=0.3.10
+pytesseract>=0.3.10
 
 # System Dependencies (install separately with apt/yum):
 # -------------------------------------------------------
