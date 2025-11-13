@@ -20,6 +20,7 @@
     'author': 'Your Company',
     'website': 'https://www.yourcompany.com',
     'license': 'LGPL-3',
+    'images': ['static/description/icon.png'],
     'depends': ['base', 'web'],
     'data': [
         'security/ir.model.access.csv',
