@@ -1,0 +1,187 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    ODOO AI CHAT - ARCHITECTURE QUICK REFERENCE               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─ CURRENT IMPLEMENTATION ──────────────────────────────────────────────────────┐
+│                                                                                │
+│  AIChatSystrayItem (JS)                                                       │
+│    └─ AIChatWidget (Owl Component)  [800px × 600px modal dialog]             │
+│         ├─ Header: Title + New Chat + Toggle Sidebar                         │
+│         ├─ Sessions Sidebar: List of chat threads (collapsible)              │
+│         ├─ Messages Area: Chat conversation                                   │
+│         └─ Input Area: Textarea + Attachment + Send                          │
+│                                                                                │
+│  Data Flow:                                                                    │
+│  Frontend ──(JSON-RPC)──> Controller ──(ORM)──> Database                     │
+│    └─ aiChatService               └─ OpenRouter API                          │
+│         └─ 8 event listeners              └─ MCP Tools                       │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DATA MODELS ─────────────────────────────────────────────────────────────────┐
+│                                                                                │
+│  ai.chat.session                                  ai.chat.message             │
+│  ├─ id (auto)                                    ├─ id (auto)                │
+│  ├─ name: string                                 ├─ session_id: FK           │
+│  ├─ user_id: FK(res.users)                      ├─ role: ['user'|'asst'|..] │
+│  ├─ message_ids: One2many                       ├─ content: text            │
+│  ├─ message_count: computed                     ├─ tool_calls: JSON         │
+│  ├─ last_message_date: computed                 ├─ tool_call_id: string     │
+│  ├─ active: boolean                             ├─ metadata: JSON           │
+│  └─ create_date                                 └─ tokens_used: int         │
+│                                                                                │
+│  Key: NO connection to mail.message or mail.thread models                    │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ BACKEND ENDPOINTS ───────────────────────────────────────────────────────────┐
+│                                                                                │
+│  POST /ai_chat/send_message      ──> Send message, get AI response           │
+│  GET  /ai_chat/get_sessions      ──> List user's chat sessions              │
+│  GET  /ai_chat/get_messages      ──> Load messages for a session            │
+│  POST /ai_chat/new_session       ──> Create new session                     │
+│  POST /ai_chat/delete_session    ──> Delete a session                       │
+│  POST /ai_chat/upload_pdf        ──> Upload invoice PDF                     │
+│  POST /ai_chat/process_invoice   ──> Process PDF to vendor bill             │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DEPENDENCIES ────────────────────────────────────────────────────────────────┐
+│                                                                                │
+│  Odoo Modules: ['base', 'web']  ← NO 'mail' or 'discuss' dependency         │
+│                                                                                │
+│  Python:  requests, pandas (opt), pytesseract                                │
+│  JS:      Chart.js 4.4.0                                                      │
+│  Odoo JS: owl, registry, useService, rpc_service                             │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ UI/UX CHARACTERISTICS ───────────────────────────────────────────────────────┐
+│                                                                                │
+│  Entry Point:          🤖 Emoji icon in system tray (top-right)             │
+│  Layout:               Two-column (sidebar + messages)                       │
+│  Color Scheme:         Purple gradient (#875a7b → #a24689)                  │
+│  Message Styling:      User (purple right) | AI (gray left)                 │
+│  Animations:           Fade-in messages, typing indicator dots              │
+│  Special Features:     Chart.js graphs, PDF upload, tool indicators         │
+│  Responsive:           Fallback to 100% width on mobile                     │
+│  Auto-scroll:          Scrolls to new messages                              │
+│  Session Sidebar:      Shows message count, last date, delete button        │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              DISCUSS MODULE INTEGRATION: COMPLEXITY ASSESSMENT                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Integration Type            │ Effort  │ Complexity │ Recommendation
+────────────────────────────┼─────────┼────────────┼────────────────────────────
+Full Discuss Integration    │ 10-15w  │ Very High  │ NOT RECOMMENDED
+  • Uses mail.message       │         │            │ Significant refactoring
+  • Document threading      │         │            │ Changes to all layers
+  • Email integration       │         │            │ Complex migrations
+────────────────────────────┼─────────┼────────────┼────────────────────────────
+Hybrid Approach (BEST)      │ 2-3w    │ Low-Med    │ RECOMMENDED ✓
+  • Keep current widget     │         │            │ Minimal disruption
+  • Add document linking    │         │            │ Leverages existing code
+  • Optional context pass   │         │            │ Low risk
+────────────────────────────┼─────────┼────────────┼────────────────────────────
+AI-Specific Channel         │ 3-4w    │ Medium     │ ALTERNATIVE
+  • Create dedicated channel│         │            │ Good for team sharing
+  • Sync to mail.message    │         │            │ Email notifications
+  • Keep sessions separate  │         │            │ More work than hybrid
+────────────────────────────┼─────────┼────────────┼────────────────────────────
+Context-Only Integration    │ 1-2w    │ Low        │ QUICK WIN
+  • Document context in AI  │         │            │ No data model changes
+  • No storage to mail      │         │            │ System prompt injection
+  • Read-only integration   │         │            │ Simplest option
+────────────────────────────┼─────────┼────────────┼────────────────────────────
+
+KEY INSIGHT: The current architecture is OPTIMIZED for standalone AI assistant
+role. Discuss integration would require abandoning custom data models for the
+mail.message protocol, which has different fields & semantics. 
+
+RECOMMENDATION: Use hybrid approach = best value with minimal effort.
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         MAJOR ARCHITECTURAL CHANGES NEEDED                   ║
+║                              FOR DISCUSS INTEGRATION                         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─ #1 DATA MODEL (HIGH IMPACT) ─────────────────────────────────────────────────┐
+│ Current:   ai.chat.message {role, content, tool_calls, metadata}             │
+│ Discuss:   mail.message {author_id, model, res_id, body, subject, ...}      │
+│ Problem:   Incompatible schema; tool_calls don't fit mail model               │
+│ Impact:    Need migration strategy + custom extensions                        │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ #2 THREADING (HIGH IMPACT) ──────────────────────────────────────────────────┐
+│ Current:   Flat sessions (Session → Messages)                                │
+│ Discuss:   Document-threaded (Document → mail.thread → messages)             │
+│ Problem:   AI sessions not tied to documents; threading model differs         │
+│ Impact:    Add res_model/res_id; decide per-document vs global               │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ #3 UI COMPONENT (HIGH IMPACT) ───────────────────────────────────────────────┐
+│ Current:   Modal dialog with session sidebar                                  │
+│ Discuss:   Embedded in document chatter; no sidebar                           │
+│ Problem:   Completely different layout paradigm                               │
+│ Impact:    Rewrite widget template; embed in chatter context                 │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ #4 REAL-TIME (MEDIUM IMPACT) ────────────────────────────────────────────────┐
+│ Current:   Polling-based service; manual RPC calls                            │
+│ Discuss:   Bus-based real-time; WebSocket notifications                       │
+│ Problem:   No live multi-user updates; sync issues                            │
+│ Impact:    Integrate with Odoo bus service for real-time                     │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ #5 ACCESS CONTROL (MEDIUM IMPACT) ───────────────────────────────────────────┐
+│ Current:   User-scoped only (Session.user_id = current)                      │
+│ Discuss:   Follower-based (mail.followers ACL)                               │
+│ Problem:   No multi-user sharing; no follower notifications                   │
+│ Impact:    Implement mail.followers; notification system                      │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ #6 EMAIL (MEDIUM IMPACT) ────────────────────────────────────────────────────┐
+│ Current:   No email; PDF-only processing                                      │
+│ Discuss:   Full SMTP/IMAP integration; incoming threads                      │
+│ Problem:   No email notifications or incoming mail handling                   │
+│ Impact:    SMTP sender setup; catchall email routing                          │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                        FILE LOCATIONS CHEAT SHEET                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+WIDGET LAYER:
+  /odoo_ai_chat/static/src/js/ai_chat_widget.js      [Main component]
+  /odoo_ai_chat/static/src/js/ai_chat_service.js     [Service layer]
+  /odoo_ai_chat/static/src/js/systray_item.js        [Systray entry]
+  /odoo_ai_chat/static/src/xml/ai_chat_templates.xml [UI templates]
+  /odoo_ai_chat/static/src/css/ai_chat.css           [Styling]
+
+BACKEND LAYER:
+  /odoo_ai_chat/controllers/main.py                  [All endpoints]
+  /odoo_ai_chat/models/ai_chat_session.py            [Session model]
+  /odoo_ai_chat/models/ai_chat_message.py            [Message model]
+  /odoo_ai_chat/models/ai_provider.py                [OpenRouter]
+  /odoo_ai_chat/models/mcp_server.py                 [MCP tools]
+  /odoo_ai_chat/models/pdf_processor.py              [PDF handling]
+
+CONFIGURATION:
+  /odoo_ai_chat/__manifest__.py                      [Module definition]
+  /odoo_ai_chat/views/ai_chat_views.xml              [ORM views]
+  /odoo_ai_chat/views/res_config_settings_views.xml  [Settings]
+  /odoo_ai_chat/security/ir.model.access.csv         [Access rules]
+
+DOCUMENTATION:
+  /ARCHITECTURE_ANALYSIS.md                          [THIS ANALYSIS]
+
+═══════════════════════════════════════════════════════════════════════════════
