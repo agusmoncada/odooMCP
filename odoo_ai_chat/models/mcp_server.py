@@ -14,6 +14,10 @@ _logger = logging.getLogger(__name__)
 # This avoids memory issues and dependency conflicts in Odoo v16
 PANDAS_AVAILABLE = False
 
+# Module-level cache for MCP server instances (one per database)
+_mcp_server_cache = {}
+_cache_lock = threading.Lock()
+
 
 class MCPServer:
     """
@@ -475,16 +479,18 @@ class MCPServerRegistry(models.AbstractModel):
     _name = 'mcp.server.registry'
     _description = 'MCP Server Registry'
 
-    _server_instance = None
-    _lock = threading.Lock()
-
     @api.model
     def get_server(self):
-        """Get or create the MCP server instance"""
-        with self._lock:
-            if self._server_instance is None:
-                self._server_instance = MCPServer(self.env)
-            return self._server_instance
+        """Get or create the MCP server instance (one per database)"""
+        global _mcp_server_cache, _cache_lock
+
+        db_name = self.env.cr.dbname
+
+        with _cache_lock:
+            if db_name not in _mcp_server_cache:
+                _logger.info(f"Creating new MCP server instance for database: {db_name}")
+                _mcp_server_cache[db_name] = MCPServer(self.env)
+            return _mcp_server_cache[db_name]
 
     @api.model
     def list_tools(self):
