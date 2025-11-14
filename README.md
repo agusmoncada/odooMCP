@@ -2,131 +2,97 @@
 
 An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that integrates MCP (Model Context Protocol) server capabilities with OpenRouter AI provider. Now with **graph generation** and **PDF invoice processing**!
 
+**✨ NEW: Lightweight, zero-dependency version! No pip install needed!**
+
 ## Features
 
-- **AI Chat Interface**: Clean, modern chat interface accessible from anywhere in Odoo via the systray icon
+- **AI Chat Interface**: Clean, modern chat interface accessible from anywhere in Odoo via the systray icon (🤖 emoji)
 - **MCP Server Integration**: Built-in MCP server that exposes Odoo data and operations to the AI
 - **OpenRouter Integration**: Connect to multiple AI models through OpenRouter (GPT-4, Claude, LLaMA, etc.)
+- **Dynamic Model Dropdown**: Fetch and select from all available OpenRouter models
 - **Tool Calling**: AI can interact with Odoo data using MCP tools (search, read, create, update records)
 - **📊 Graph Generation**: AI can create interactive charts and graphs from Odoo data (line, bar, pie, area, scatter, doughnut)
 - **📄 PDF Invoice Processing**: Upload PDF invoices and automatically create vendor bills with AI-powered data extraction
 - **Session Management**: Create multiple chat sessions and switch between them
 - **Chat History**: All conversations are saved and can be reviewed later
 - **Configurable**: Extensive configuration options for AI behavior, model selection, and more
+- **🚀 Zero Dependencies**: Uses lightweight alternatives - no pip install required!
 
 ## Installation
 
-### ✅ PRODUCTION-TESTED Installation
+### ✅ SIMPLE Installation - No Dependencies!
 
-**This addon uses a tested configuration that works with Odoo v16.**
-
-We upgrade both `cryptography` and `pyOpenSSL` to compatible newer versions (tested in production):
-- `cryptography: 41.0.7` (from Odoo's default 3.3.2)
-- `pyOpenSSL: 24.0.0` (from Odoo's default 20.0.1)
-- `urllib3: 2.5.0` (from Odoo's default 1.26.5)
+**This addon now uses lightweight, pure Python alternatives that are already in Odoo v16!**
 
 ### 1. Prerequisites
 
 - Odoo v16 Community Edition
-- Python 3.8+
-- **Backup your Odoo instance before installing!**
+- Python 3.8+ (comes with Odoo)
+- That's it! No external packages needed!
 
-### 2. Install Dependencies (PRODUCTION-TESTED ✅)
+### 2. Install the Module
 
-**Recommended: Production Configuration (Tested & Working)**
-```bash
-# Step 1: Upgrade cryptography stack (required for addon dependencies)
-pip3 install cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
-
-# Step 2: Install addon dependencies
-pip3 install -r requirements.txt
-
-# Step 3: Verify installation
-pip3 show cryptography pyOpenSSL urllib3
-# cryptography: 41.0.7 ✅
-# pyOpenSSL: 24.0.0 ✅
-# urllib3: 2.5.0 ✅
-```
-
-**Alternative: Conservative Approach (Untested)**
-```bash
-# Try keeping Odoo's default cryptography 3.3.2
-pip3 install -r requirements.txt --no-deps
-
-# Verify cryptography wasn't upgraded
-pip3 show cryptography | grep Version
-# Should show: Version: 3.3.2
-```
-
-**Best Practice: Virtual Environment**
-```bash
-# Create isolated environment
-python3 -m venv odoo_ai_chat_venv
-source odoo_ai_chat_venv/bin/activate
-pip install cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
-pip install -r requirements.txt
-```
-
-**System packages for OCR (optional):**
-```bash
-apt-get install tesseract-ocr poppler-utils  # Debian/Ubuntu
-```
-
-### 3. Install the Module
-
-1. Copy the `odoo_ai_chat` directory to your Odoo addons path
-2. Restart the Odoo server
-3. Update the Apps list (Apps > Update Apps List)
-4. Search for "AI Chat Assistant" and install it
-
-### 🚨 Troubleshooting
-
-**If Odoo breaks after installation with SSL/cryptography errors:**
+**No pip install required!** The addon uses:
+- **PyPDF2** (already in Odoo v16) instead of pdfplumber
+- **Pure Python** (stdlib) instead of pandas/numpy
+- **Odoo's built-in tools** instead of Pillow
 
 ```bash
-# Option 1: Use production-tested versions (recommended)
-pip3 install --force-reinstall cryptography==41.0.7 pyOpenSSL==24.0.0 urllib3==2.5.0
-# Restart Odoo
+# 1. Copy the addon to your Odoo addons directory
+cp -r odoo_ai_chat /path/to/odoo/addons/
 
-# Option 2: Revert to Odoo defaults (if Option 1 fails)
-pip3 install --force-reinstall cryptography==3.3.2 pyOpenSSL==20.0.1
-# Restart Odoo
+# 2. Restart Odoo
+sudo systemctl restart odoo
+# or
+./odoo-bin -c /path/to/odoo.conf
+
+# 3. Update the Apps list in Odoo
+# Go to Apps > Update Apps List
+
+# 4. Search for "AI Chat Assistant" and click Install
 ```
-
-**Error:** `AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'`
-- **Cause:** pip upgraded cryptography to version >=42.0.0 which is incompatible
-- **Fix:** Use Option 1 above (production-tested versions)
-
-**Production-Tested Package Versions:**
-- ✅ cryptography: 41.0.7
-- ✅ pyOpenSSL: 24.0.0
-- ✅ urllib3: 2.5.0
-- ✅ pdfplumber: 0.9.0
-- ✅ pandas: 1.3.5
-- ✅ numpy: 1.24.3
-- ✅ Pillow: 9.5.0
-- ✅ pytesseract: 0.3.10
-
-## Configuration
-
-### 1. Get OpenRouter API Key
 
 1. Visit [OpenRouter](https://openrouter.ai/)
 2. Create an account
 3. Go to [Keys](https://openrouter.ai/keys) and generate an API key
 
-### 2. Configure the Module
+### 4. Configure in Odoo
 
 1. Go to **Settings > General Settings**
 2. Scroll down to the **AI Chat** section
 3. Enter your OpenRouter API key
-4. Configure other settings:
-   - **AI Model**: Choose the model (e.g., `openai/gpt-3.5-turbo`, `anthropic/claude-3-sonnet`)
+4. Click **🔄 Refresh Models** to fetch all available AI models
+5. Select your preferred AI model from the dropdown
+6. Configure other settings:
    - **Temperature**: Control randomness (0-2, default 0.7)
    - **Max Tokens**: Maximum response length (default 2000)
    - **Enable MCP Tools**: Allow AI to interact with Odoo data (recommended)
    - **System Prompt**: Customize the AI's behavior and personality
-5. Click **Save**
+7. Click **Save**
+
+### 🚨 Troubleshooting
+
+**Issue:** "PyPDF2 not available" error
+- **Cause:** PyPDF2 might not be included in your Odoo installation
+- **Fix:** `pip3 install PyPDF2>=1.26.0`
+
+**Issue:** Chat window doesn't open
+- **Solution:** Clear browser cache and refresh (Ctrl+F5)
+
+**Issue:** No robot icon in menu bar
+- **Solution:**
+  1. Check that the module is installed (Apps > AI Chat Assistant)
+  2. Refresh the page
+  3. Check browser console for JavaScript errors
+
+**Issue:** PDF processing fails
+- **Cause:** PDF might be image-based (scanned) without text
+- **Solution:** Use OCR-enabled PDFs or text-based PDFs
+
+**Issue:** Graph generation fails
+- **Solution:** Check that the model has numeric fields for the y-axis
+
+For more details, see `DEPENDENCY_ISSUES.md` in the repository.
 
 ## Usage
 

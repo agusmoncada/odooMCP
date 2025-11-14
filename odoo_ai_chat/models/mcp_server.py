@@ -10,12 +10,9 @@ from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
 
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
-    _logger.warning("pandas not available. Graph generation will be limited.")
+# Removed pandas dependency - using pure Python implementation
+# This avoids memory issues and dependency conflicts in Odoo v16
+PANDAS_AVAILABLE = False
 
 
 class MCPServer:
@@ -337,14 +334,10 @@ class MCPServer:
             data = records.read(fields_to_read)
 
             # Process data based on graph type and grouping
-            if PANDAS_AVAILABLE:
-                result = self._process_with_pandas(
-                    data, graph_type, x_field, y_field, group_by, aggregation, limit
-                )
-            else:
-                result = self._process_without_pandas(
-                    data, graph_type, x_field, y_field, group_by, aggregation, limit
-                )
+            # Use pure Python implementation (lightweight, no dependencies)
+            result = self._process_graph_data(
+                data, graph_type, x_field, y_field, group_by, aggregation, limit
+            )
 
             # Add metadata
             result['graph_data']['title'] = title or self._generate_title(
@@ -358,91 +351,10 @@ class MCPServer:
             _logger.exception("Error generating graph")
             return {'success': False, 'error': str(e)}
 
-    def _process_with_pandas(self, data: List[Dict], graph_type: str,
+    def _process_graph_data(self, data: List[Dict], graph_type: str,
                             x_field: str, y_field: str, group_by: str,
                             aggregation: str, limit: int) -> Dict:
-        """Process graph data using pandas"""
-        df = pd.DataFrame(data)
-
-        # Convert date fields to datetime
-        if x_field and x_field in df.columns:
-            if df[x_field].dtype == 'object':
-                try:
-                    df[x_field] = pd.to_datetime(df[x_field])
-                except Exception:
-                    pass
-
-        # Apply aggregation
-        if group_by and group_by in df.columns:
-            # Group by the specified field
-            if aggregation == 'count':
-                grouped = df.groupby(group_by)[y_field].count().reset_index()
-            elif aggregation == 'avg':
-                grouped = df.groupby(group_by)[y_field].mean().reset_index()
-            elif aggregation == 'min':
-                grouped = df.groupby(group_by)[y_field].min().reset_index()
-            elif aggregation == 'max':
-                grouped = df.groupby(group_by)[y_field].max().reset_index()
-            else:  # sum
-                grouped = df.groupby(group_by)[y_field].sum().reset_index()
-
-            grouped = grouped.nlargest(limit, y_field)
-            labels = grouped[group_by].tolist()
-            values = grouped[y_field].tolist()
-
-            # Convert complex types to strings
-            labels = [self._format_label(label) for label in labels]
-
-        elif x_field and x_field in df.columns:
-            # Time series or x-y graph
-            df_sorted = df.sort_values(by=x_field)
-
-            if aggregation == 'count':
-                grouped = df_sorted.groupby(x_field)[y_field].count().reset_index()
-            elif aggregation == 'avg':
-                grouped = df_sorted.groupby(x_field)[y_field].mean().reset_index()
-            else:  # sum, min, max
-                grouped = df_sorted.groupby(x_field)[y_field].agg(aggregation).reset_index()
-
-            labels = grouped[x_field].tolist()
-            values = grouped[y_field].tolist()
-
-            # Format dates
-            labels = [self._format_label(label) for label in labels]
-            values = [float(v) if pd.notna(v) else 0 for v in values]
-
-        else:
-            # Simple aggregation
-            if aggregation == 'count':
-                value = len(df)
-            elif aggregation == 'avg':
-                value = df[y_field].mean()
-            elif aggregation == 'min':
-                value = df[y_field].min()
-            elif aggregation == 'max':
-                value = df[y_field].max()
-            else:  # sum
-                value = df[y_field].sum()
-
-            labels = ['Total']
-            values = [float(value) if pd.notna(value) else 0]
-
-        return {
-            'success': True,
-            'graph_data': {
-                'type': graph_type,
-                'labels': labels[:limit],
-                'datasets': [{
-                    'label': y_field.replace('_', ' ').title(),
-                    'data': values[:limit]
-                }]
-            }
-        }
-
-    def _process_without_pandas(self, data: List[Dict], graph_type: str,
-                                x_field: str, y_field: str, group_by: str,
-                                aggregation: str, limit: int) -> Dict:
-        """Process graph data without pandas (fallback)"""
+        """Process graph data using pure Python (lightweight, no dependencies)"""
         # Simple implementation without pandas
         if group_by:
             # Group and aggregate manually
