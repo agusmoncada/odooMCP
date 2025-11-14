@@ -188,12 +188,16 @@ class AIChatController(http.Controller):
                 })
 
                 # Save tool result message
+                metadata = {'tool_name': tool_name}
+                if graph_data:
+                    metadata['graph_data'] = graph_data
+
                 Message.create({
                     'session_id': session.id,
                     'role': 'tool',
                     'content': json.dumps(tool_result),
                     'tool_call_id': tool_call_id,
-                    'metadata': json.dumps({'graph_data': graph_data}) if graph_data else None
+                    'metadata': json.dumps(metadata)
                 })
 
             # Get final response from AI after tool execution

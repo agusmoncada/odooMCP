@@ -72,13 +72,47 @@ class AIChatSession(models.Model):
 
     def get_messages_for_api(self):
         """Get messages formatted for AI API"""
+        import json
         self.ensure_one()
         messages = []
 
         for msg in self.message_ids.sorted('create_date'):
-            messages.append({
+            message_dict = {
                 'role': msg.role,
                 'content': msg.content
-            })
+            }
+
+            # Add tool_calls for assistant messages that called tools
+            if msg.role == 'assistant' and msg.tool_calls:
+                try:
+                    tool_calls_data = json.loads(msg.tool_calls)
+                    if tool_calls_data:
+                        # Format tool calls for OpenAI API
+                        message_dict['tool_calls'] = []
+                        for tool_call in tool_calls_data:
+                            message_dict['tool_calls'].append({
+                                'id': tool_call['tool_call_id'],
+                                'type': 'function',
+                                'function': {
+                                    'name': tool_call['name'],
+                                    'arguments': json.dumps(tool_call['arguments'])
+                                }
+                            })
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # Add tool_call_id for tool response messages
+            elif msg.role == 'tool' and msg.tool_call_id:
+                message_dict['tool_call_id'] = msg.tool_call_id
+                # Extract tool name from metadata if available
+                if msg.metadata:
+                    try:
+                        metadata = json.loads(msg.metadata)
+                        if metadata.get('tool_name'):
+                            message_dict['name'] = metadata['tool_name']
+                    except json.JSONDecodeError:
+                        pass
+
+            messages.append(message_dict)
 
         return messages
