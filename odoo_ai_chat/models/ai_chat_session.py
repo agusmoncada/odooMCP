@@ -79,6 +79,12 @@ class AIChatSession(models.Model):
         self.ensure_one()
         messages = []
 
+        # Track which tool_call_ids have responses
+        tool_call_ids_with_responses = set()
+        for msg in self.message_ids:
+            if msg.role == 'tool' and msg.tool_call_id:
+                tool_call_ids_with_responses.add(msg.tool_call_id)
+
         for msg in self.message_ids.sorted('create_date'):
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
@@ -95,6 +101,19 @@ class AIChatSession(models.Model):
                 try:
                     tool_calls_data = json.loads(msg.tool_calls)
                     if tool_calls_data:
+                        # Check if ALL tool calls have responses
+                        all_have_responses = all(
+                            tc.get('tool_call_id') in tool_call_ids_with_responses
+                            for tc in tool_calls_data
+                        )
+
+                        if not all_have_responses:
+                            # Skip this assistant message - incomplete tool execution
+                            missing_ids = [tc.get('tool_call_id') for tc in tool_calls_data
+                                         if tc.get('tool_call_id') not in tool_call_ids_with_responses]
+                            _logger.warning(f"Skipping assistant message {msg.id} with incomplete tool calls. Missing responses for: {missing_ids}")
+                            continue
+
                         # Format tool calls for OpenAI API
                         message_dict['tool_calls'] = []
                         for tool_call in tool_calls_data:
