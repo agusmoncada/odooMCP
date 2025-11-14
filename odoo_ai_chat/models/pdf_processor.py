@@ -10,12 +10,13 @@ from odoo import exceptions
 
 _logger = logging.getLogger(__name__)
 
+# Use PyPDF2 (lightweight, pure Python, already available in Odoo)
 try:
-    import pdfplumber
-    PDFPLUMBER_AVAILABLE = True
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
 except ImportError:
-    PDFPLUMBER_AVAILABLE = False
-    _logger.warning("pdfplumber not available. Install with: pip3 install pdfplumber")
+    PYPDF2_AVAILABLE = False
+    _logger.warning("PyPDF2 not available. PDF processing will be disabled.")
 
 
 class PDFInvoiceProcessor:
@@ -35,10 +36,10 @@ class PDFInvoiceProcessor:
         Returns:
             Dict with extracted invoice data
         """
-        if not PDFPLUMBER_AVAILABLE:
+        if not PYPDF2_AVAILABLE:
             return {
                 'success': False,
-                'error': 'PDF processing library not available. Install with: pip3 install pdfplumber'
+                'error': 'PDF processing library not available. PyPDF2 is required but not found.'
             }
 
         try:
@@ -69,29 +70,28 @@ class PDFInvoiceProcessor:
             }
 
     def _extract_text(self, pdf_content: bytes) -> str:
-        """Extract text from PDF using pdfplumber"""
+        """Extract text from PDF using PyPDF2 (lightweight alternative)"""
         text_parts = []
 
         try:
-            with pdfplumber.open(io.BytesIO(pdf_content)) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
-                    _logger.info(f"Extracting text from page {page_num}")
+            pdf_file = io.BytesIO(pdf_content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
 
-                    # Try to extract text
-                    text = page.extract_text()
-                    if text:
-                        text_parts.append(text)
+            _logger.info(f"Processing PDF with {len(pdf_reader.pages)} pages")
 
-                    # Also try to extract tables
-                    tables = page.extract_tables()
-                    if tables:
-                        for table in tables:
-                            # Convert table to text representation
-                            for row in table:
-                                if row:
-                                    text_parts.append(" | ".join(str(cell) if cell else "" for cell in row))
+            for page_num, page in enumerate(pdf_reader.pages, 1):
+                _logger.info(f"Extracting text from page {page_num}")
 
-            return '\n'.join(text_parts)
+                # Extract text from page
+                text = page.extract_text()
+                if text and text.strip():
+                    text_parts.append(text)
+
+            extracted_text = '\n'.join(text_parts)
+
+            # Note: PyPDF2 doesn't extract tables as structured data like pdfplumber
+            # But the AI can still parse invoice data from the raw text
+            return extracted_text
 
         except Exception as e:
             _logger.exception("Error extracting text from PDF")

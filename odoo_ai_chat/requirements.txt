@@ -1,8 +1,12 @@
-# ⚠️  PINNED for Odoo v16 Compatibility
-# See /requirements.txt in repo root for details
+# ✅ ZERO DEPENDENCIES NEEDED!
+# This addon uses lightweight alternatives compatible with Odoo v16
 
-# IMPORTANT: Newer versions will break Odoo v16
-pdfplumber==0.9.0
-pandas>=1.5.0,<2.0.0
-python-magic>=0.4.27,<1.0.0
-Pillow==9.5.0
+# No pip install required! The addon now uses:
+# - PyPDF2 (already in Odoo v16) instead of pdfplumber
+# - Pure Python stdlib instead of pandas/numpy
+# - Odoo's built-in tools instead of Pillow
+
+# Optional: Only if PyPDF2 is somehow missing from your Odoo
+# PyPDF2>=1.26.0,<4.0.0
+
+# See /requirements.txt in repo root for full documentation
