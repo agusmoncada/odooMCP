@@ -77,9 +77,13 @@ class AIChatSession(models.Model):
         messages = []
 
         for msg in self.message_ids.sorted('create_date'):
+            # Skip tool messages without proper tool_call_id (backward compatibility)
+            if msg.role == 'tool' and not msg.tool_call_id:
+                continue
+
             message_dict = {
                 'role': msg.role,
-                'content': msg.content
+                'content': msg.content or ''
             }
 
             # Add tool_calls for assistant messages that called tools
@@ -98,7 +102,8 @@ class AIChatSession(models.Model):
                                     'arguments': json.dumps(tool_call['arguments'])
                                 }
                             })
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # If we can't parse tool_calls, don't include them
                     pass
 
             # Add tool_call_id for tool response messages
