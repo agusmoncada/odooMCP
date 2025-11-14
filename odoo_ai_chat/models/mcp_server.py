@@ -39,7 +39,7 @@ class MCPServer:
         self._tools = {
             'search_records': {
                 'name': 'search_records',
-                'description': 'Search and retrieve records from any Odoo model. Use for queries, counts, sums, checking status, and listing data. Returns actual data.',
+                'description': 'Search and retrieve records from any Odoo model. Use this tool for: queries, counts, sums, checking status, listing data, getting totals, finding records. Returns actual data that you can analyze and present to user. This is your PRIMARY tool for data retrieval.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -93,13 +93,13 @@ class MCPServer:
             },
             'write_record': {
                 'name': 'write_record',
-                'description': 'Update/modify/change existing records. Use when user asks to mark, update, change, or modify data. Requires record_id and values to update.',
+                'description': 'Update/modify/change existing records. Use when user asks to mark, update, change, or modify data. IMPORTANT: You MUST always provide the values parameter as a dict/object with the fields to update. Example: to mark sale order as sent, use values={"state": "sent"}. Common sale.order states: "draft", "sent", "sale", "done", "cancel".',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
-                        'model': {'type': 'string', 'description': 'The Odoo model name'},
-                        'record_id': {'type': 'integer', 'description': 'The record ID'},
-                        'values': {'type': 'object', 'description': 'Field values to update'}
+                        'model': {'type': 'string', 'description': 'The Odoo model name (e.g., "sale.order", "res.partner")'},
+                        'record_id': {'type': 'integer', 'description': 'The ID of the record to update'},
+                        'values': {'type': 'object', 'description': 'Dictionary of field names and values to update. Example: {"state": "sent", "note": "Updated by AI"}. This parameter is REQUIRED.'}
                     },
                     'required': ['model', 'record_id', 'values']
                 }
@@ -117,7 +117,7 @@ class MCPServer:
             },
             'generate_graph': {
                 'name': 'generate_graph',
-                'description': 'Generate a visual chart/graph ONLY when user explicitly requests visualization (chart, graph, plot). NOT for simple data queries.',
+                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
