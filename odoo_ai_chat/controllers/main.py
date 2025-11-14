@@ -3,6 +3,7 @@
 import json
 import logging
 import base64
+from datetime import datetime, date
 
 from odoo import http
 from odoo.http import request
@@ -10,6 +11,16 @@ from odoo.http import request
 from ..models.ai_provider import OpenRouterProvider
 
 _logger = logging.getLogger(__name__)
+
+
+class OdooJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles Odoo-specific types"""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        elif isinstance(obj, bytes):
+            return base64.b64encode(obj).decode('utf-8')
+        return super().default(obj)
 
 
 class AIChatController(http.Controller):
@@ -206,7 +217,7 @@ class AIChatController(http.Controller):
                     'role': 'tool',
                     'tool_call_id': tool_call_id,
                     'name': tool_name,
-                    'content': json.dumps(tool_result)
+                    'content': json.dumps(tool_result, cls=OdooJSONEncoder)
                 })
 
                 # Save tool result message
@@ -217,7 +228,7 @@ class AIChatController(http.Controller):
                 Message.create({
                     'session_id': session.id,
                     'role': 'tool',
-                    'content': json.dumps(tool_result),
+                    'content': json.dumps(tool_result, cls=OdooJSONEncoder),
                     'tool_call_id': tool_call_id,
                     'metadata': json.dumps(metadata)
                 })
