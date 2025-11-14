@@ -73,12 +73,16 @@ class AIChatSession(models.Model):
     def get_messages_for_api(self):
         """Get messages formatted for AI API"""
         import json
+        import logging
+        _logger = logging.getLogger(__name__)
+
         self.ensure_one()
         messages = []
 
         for msg in self.message_ids.sorted('create_date'):
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
+                _logger.warning(f"Skipping tool message {msg.id} without tool_call_id")
                 continue
 
             message_dict = {
@@ -116,15 +120,23 @@ class AIChatSession(models.Model):
                     try:
                         metadata = json.loads(msg.metadata)
                         tool_name = metadata.get('tool_name')
-                    except json.JSONDecodeError:
-                        pass
+                        _logger.info(f"Tool message {msg.id} metadata: {metadata}, tool_name: {tool_name}")
+                    except json.JSONDecodeError as e:
+                        _logger.error(f"Failed to parse metadata for tool message {msg.id}: {e}")
+                else:
+                    _logger.warning(f"Tool message {msg.id} has no metadata")
 
                 # Skip tool messages without name (backward compatibility)
                 if not tool_name:
+                    _logger.warning(f"Skipping tool message {msg.id} without tool_name")
                     continue
 
                 message_dict['name'] = tool_name
 
             messages.append(message_dict)
+
+        _logger.info(f"Returning {len(messages)} messages for API")
+        for i, msg in enumerate(messages):
+            _logger.info(f"Message[{i}]: role={msg.get('role')}, has_tool_calls={bool(msg.get('tool_calls'))}, has_tool_call_id={bool(msg.get('tool_call_id'))}, has_name={bool(msg.get('name'))}")
 
         return messages
