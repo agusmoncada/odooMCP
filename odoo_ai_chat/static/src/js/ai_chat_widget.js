@@ -84,6 +84,15 @@ export class AIChatWidget extends Component {
     async loadSession(sessionId) {
         try {
             this.state.loading = true;
+
+            // Destroy existing charts before loading new session
+            Object.values(this.charts).forEach(chartRenderer => {
+                if (chartRenderer && chartRenderer.destroy) {
+                    chartRenderer.destroy();
+                }
+            });
+            this.charts = {};
+
             const messages = await this.aiChat.getMessages(sessionId);
             this.state.messages = messages;
             this.state.currentSessionId = sessionId;
@@ -146,6 +155,14 @@ export class AIChatWidget extends Component {
      */
     async newChat() {
         try {
+            // Destroy existing charts before creating new session
+            Object.values(this.charts).forEach(chartRenderer => {
+                if (chartRenderer && chartRenderer.destroy) {
+                    chartRenderer.destroy();
+                }
+            });
+            this.charts = {};
+
             await this.aiChat.newSession();
             this.state.messages = [];
             this.state.currentSessionId = this.aiChat.getCurrentSessionId();
@@ -339,20 +356,23 @@ export class AIChatWidget extends Component {
      * Render all charts in messages
      */
     renderCharts() {
-        this.state.messages.forEach((message, index) => {
-            if (message.graph_data && message.graph_data.type) {
-                const canvasId = `chart_${message.id || index}`;
-                const canvas = document.getElementById(canvasId);
+        // Small delay to ensure DOM is fully updated
+        setTimeout(() => {
+            this.state.messages.forEach((message, index) => {
+                if (message.graph_data && message.graph_data.type) {
+                    const canvasId = `chart_${message.id || index}`;
+                    const canvas = document.getElementById(canvasId);
 
-                if (canvas && !this.charts[canvasId]) {
-                    const renderer = new ChartRenderer(canvas, message.graph_data);
-                    const chart = renderer.render();
-                    if (chart) {
-                        this.charts[canvasId] = renderer;
+                    if (canvas && !this.charts[canvasId]) {
+                        const renderer = new ChartRenderer(canvas, message.graph_data);
+                        const chart = renderer.render();
+                        if (chart) {
+                            this.charts[canvasId] = renderer;
+                        }
                     }
                 }
-            }
-        });
+            });
+        }, 50);
     }
 
     /**
