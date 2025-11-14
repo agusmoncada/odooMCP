@@ -44,8 +44,18 @@ class MCPServer:
                     'type': 'object',
                     'properties': {
                         'model': {'type': 'string', 'description': 'The Odoo model name (e.g., res.partner)'},
-                        'domain': {'type': 'array', 'description': 'Search domain'},
-                        'fields': {'type': 'array', 'description': 'Fields to return'},
+                        'domain': {
+                            'type': 'array',
+                            'items': {},  # Allow any type of items in domain array
+                            'description': 'Search domain (list of tuples)',
+                            'default': []
+                        },
+                        'fields': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to return',
+                            'default': []
+                        },
                         'limit': {'type': 'integer', 'description': 'Maximum number of records', 'default': 10}
                     },
                     'required': ['model']
@@ -59,7 +69,12 @@ class MCPServer:
                     'properties': {
                         'model': {'type': 'string', 'description': 'The Odoo model name'},
                         'record_id': {'type': 'integer', 'description': 'The record ID'},
-                        'fields': {'type': 'array', 'description': 'Fields to return'}
+                        'fields': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to return',
+                            'default': []
+                        }
                     },
                     'required': ['model', 'record_id']
                 }
@@ -117,7 +132,9 @@ class MCPServer:
                         },
                         'domain': {
                             'type': 'array',
-                            'description': 'Search domain for filtering records'
+                            'items': {},  # Allow any type of items in domain array
+                            'description': 'Search domain for filtering records',
+                            'default': []
                         },
                         'x_field': {
                             'type': 'string',

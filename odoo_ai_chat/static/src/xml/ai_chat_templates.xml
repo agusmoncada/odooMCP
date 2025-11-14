@@ -4,7 +4,7 @@
     <!-- Systray Item Template -->
     <t t-name="odoo_ai_chat.SystrayItem" owl="1">
         <div class="o_ai_chat_systray" t-on-click="openChat" title="AI Chat Assistant">
-            <span class="o_ai_chat_icon">🤖</span>
+            <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI Chat" class="o_ai_chat_icon"/>
         </div>
     </t>
 
