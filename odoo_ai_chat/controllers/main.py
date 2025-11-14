@@ -83,6 +83,7 @@ class AIChatController(http.Controller):
 
             # Get MCP tools if enabled
             tools = []
+            tools_were_executed = False  # Track if we executed tools
             if config['mcp_tools_enabled']:
                 mcp_registry = request.env['mcp.server.registry']
                 tools = mcp_registry.list_tools()
@@ -96,12 +97,28 @@ class AIChatController(http.Controller):
 
                 # Process tool calls if needed
                 if response.get('requires_tool_execution'):
+                    # Save tool_calls for later display
+                    tool_calls_for_display = response.get('tool_calls', [])
+
+                    # Save assistant message with tool_calls BEFORE executing tools
+                    # This ensures correct message ordering in the database
+                    assistant_with_tools_msg = Message.create({
+                        'session_id': session.id,
+                        'role': 'assistant',
+                        'content': response.get('message') or '',
+                        'tool_calls': json.dumps(tool_calls_for_display)
+                    })
+
                     response = self._execute_tool_calls(
                         session=session,
                         response=response,
                         ai_provider=ai_provider,
                         config=config
                     )
+
+                    # Add tool_calls back for frontend display
+                    response['tool_calls'] = tool_calls_for_display
+                    tools_were_executed = True
             else:
                 api_response = ai_provider.chat(
                     messages=messages,
@@ -119,12 +136,17 @@ class AIChatController(http.Controller):
 
             # Create assistant message
             if response.get('success'):
+                # If tools were executed, we need to save the final response
+                # If no tools, just save the regular response
                 message_vals = {
                     'session_id': session.id,
                     'role': 'assistant',
                     'content': response.get('message', ''),
-                    'tool_calls': json.dumps(response.get('tool_calls', [])) if response.get('tool_calls') else False
                 }
+
+                # Don't save tool_calls on the final message (already saved earlier)
+                if not tools_were_executed and response.get('tool_calls'):
+                    message_vals['tool_calls'] = json.dumps(response.get('tool_calls', []))
 
                 # Store graph data in metadata if present
                 if response.get('graph_data'):
@@ -213,7 +235,6 @@ class AIChatController(http.Controller):
             return {
                 'success': True,
                 'message': final_message,
-                'tool_calls': tool_calls,
                 'graph_data': graph_data
             }
 
