@@ -109,14 +109,21 @@ class AIChatSession(models.Model):
             # Add tool_call_id for tool response messages
             elif msg.role == 'tool' and msg.tool_call_id:
                 message_dict['tool_call_id'] = msg.tool_call_id
-                # Extract tool name from metadata if available
+
+                # Extract tool name from metadata - REQUIRED by OpenRouter
+                tool_name = None
                 if msg.metadata:
                     try:
                         metadata = json.loads(msg.metadata)
-                        if metadata.get('tool_name'):
-                            message_dict['name'] = metadata['tool_name']
+                        tool_name = metadata.get('tool_name')
                     except json.JSONDecodeError:
                         pass
+
+                # Skip tool messages without name (backward compatibility)
+                if not tool_name:
+                    continue
+
+                message_dict['name'] = tool_name
 
             messages.append(message_dict)
 

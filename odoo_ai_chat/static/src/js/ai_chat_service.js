@@ -42,6 +42,7 @@ export const aiChatService = {
                         content: result.message,
                         create_date: new Date().toISOString(),
                         tool_calls: result.tool_calls,
+                        graph_data: result.graph_data,
                     });
 
                     notifyListeners('message', result);

@@ -118,15 +118,7 @@ export class AIChatWidget extends Component {
             this.state.loading = true;
             this.state.inputMessage = "";
 
-            // Optimistically add user message
-            this.state.messages.push({
-                role: "user",
-                content: message,
-                create_date: new Date().toISOString(),
-            });
-            this.scrollToBottom();
-
-            // Send to backend
+            // Send to backend (service will handle adding messages)
             const result = await this.aiChat.sendMessage(
                 message,
                 this.state.currentSessionId
@@ -134,6 +126,8 @@ export class AIChatWidget extends Component {
 
             if (result.success) {
                 this.state.currentSessionId = result.session_id;
+                // Messages are updated via event listener
+                this.scrollToBottom();
                 await this.loadSessions();
             } else {
                 this.notification.add(result.error || "Failed to send message", {
