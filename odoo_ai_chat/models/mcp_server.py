@@ -39,7 +39,7 @@ class MCPServer:
         self._tools = {
             'search_records': {
                 'name': 'search_records',
-                'description': 'Search for records in any Odoo model',
+                'description': 'Search and retrieve records from any Odoo model. Use for queries, counts, sums, checking status, and listing data. Returns actual data.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -93,7 +93,7 @@ class MCPServer:
             },
             'write_record': {
                 'name': 'write_record',
-                'description': 'Update an existing record in an Odoo model',
+                'description': 'Update/modify/change existing records. Use when user asks to mark, update, change, or modify data. Requires record_id and values to update.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -117,7 +117,7 @@ class MCPServer:
             },
             'generate_graph': {
                 'name': 'generate_graph',
-                'description': 'Generate a graph/chart from Odoo data for visualization',
+                'description': 'Generate a visual chart/graph ONLY when user explicitly requests visualization (chart, graph, plot). NOT for simple data queries.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
