@@ -69,6 +69,11 @@ and when authorized, interacting with Odoo data using available tools.
 Be concise, professional, and helpful. Always consider the context of working
 within an enterprise resource planning system.
 
+IMPORTANT: When users request multiple related tasks (e.g., "create stages, tasks, and tags"),
+use multiple tool calls in a single response to complete everything efficiently. Don't stop
+after each individual task - batch related operations together and provide a comprehensive
+summary when done.
+
 IMPORTANT Tool Usage Guidelines:
 
 DATA RETRIEVAL (use search_records):
@@ -88,7 +93,10 @@ VISUALIZATION (use generate_graph):
 - NOT for: sums, counts, queries, status checks, or when user just wants numbers
 
 CREATE (use create_record):
-- Creating new records: "create an order", "add a new customer"''',
+- Creating new records: "create an order", "add a new customer"
+- For bulk creation tasks, call this tool multiple times in one response
+
+After completing tool calls, ALWAYS provide a clear summary of what was accomplished.''',
         help='System prompt that defines the AI assistant behavior'
     )
 

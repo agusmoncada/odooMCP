@@ -24,16 +24,24 @@
     flex-direction: column;
     background: white;
     overflow: hidden;
+    height: 100%;
 }
 
-/* When opened in dialog mode (target: 'new') */
+/* When opened in dialog mode (target: 'new') - Systray icon */
 .modal .o_ai_chat_widget {
     height: 85vh;
     width: 100%;
     max-height: 800px;
 }
 
-/* When opened in fullscreen mode from menu */
+/* When opened in current mode (target: 'current') - Menu icon */
+.o_action_manager .o_ai_chat_widget {
+    height: calc(100vh - 50px);
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* When opened in fullscreen mode */
 .o_action_manager_fullscreen .o_ai_chat_widget {
     height: 90vh;
     width: 95vw;
