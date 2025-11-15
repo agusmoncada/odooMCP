@@ -22,12 +22,23 @@
 .o_ai_chat_widget {
     display: flex;
     flex-direction: column;
+    background: white;
+    overflow: hidden;
+}
+
+/* When opened in dialog mode (target: 'new') */
+.modal .o_ai_chat_widget {
+    height: 85vh;
+    width: 100%;
+    max-height: 800px;
+}
+
+/* When opened in fullscreen mode from menu */
+.o_action_manager_fullscreen .o_ai_chat_widget {
     height: 90vh;
     width: 95vw;
     max-width: 1400px;
     margin: 20px auto;
-    background: white;
-    overflow: hidden;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }

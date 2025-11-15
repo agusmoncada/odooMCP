@@ -264,6 +264,7 @@ class AIChatController(http.Controller):
 
         # Get final response from AI after tool execution
         try:
+            _logger.info(f"Getting final AI response after executing {len(tool_calls)} tools")
             final_response = ai_provider.chat(
                 messages=current_messages,
                 temperature=config['temperature'],
@@ -272,6 +273,8 @@ class AIChatController(http.Controller):
 
             choice = final_response.get('choices', [{}])[0]
             final_message = choice.get('message', {}).get('content', '')
+
+            _logger.info(f"Final AI response received: {final_message[:100]}...")
 
             return {
                 'success': True,
