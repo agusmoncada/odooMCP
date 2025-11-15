@@ -241,6 +241,11 @@ class MCPServer:
                 'count': len(data),
                 'records': data
             }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
+            }
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -262,6 +267,11 @@ class MCPServer:
                 'success': True,
                 'record': data
             }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
+            }
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -275,6 +285,12 @@ class MCPServer:
                 'success': True,
                 'record_id': record.id,
                 'record': record.read()[0]
+            }
+        except KeyError as e:
+            # Model doesn't exist - likely module not installed
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed. Please check if the module is installed and activated."
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -294,6 +310,11 @@ class MCPServer:
                 'success': True,
                 'record': record.read()[0]
             }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
+            }
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -307,6 +328,11 @@ class MCPServer:
                 'success': True,
                 'model': model,
                 'fields': fields_info
+            }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
