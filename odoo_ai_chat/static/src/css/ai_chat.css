@@ -22,10 +22,10 @@
 .o_ai_chat_widget {
     display: flex;
     flex-direction: column;
-    height: 600px;
-    width: 800px;
+    height: 100%;
+    width: 100%;
+    max-width: 100%;
     background: white;
-    border-radius: 8px;
     overflow: hidden;
 }
 
