@@ -227,8 +227,24 @@ class MCPServer:
     def _search_records(self, model: str, domain: List = None, fields: List = None, limit: int = 10) -> Dict:
         """Search for records in a model"""
         try:
+            import json
             Model = self.env[model]
             domain = domain or []
+
+            # Handle domain as string (AI sometimes sends JSON strings)
+            if isinstance(domain, str):
+                try:
+                    domain = json.loads(domain)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid domain format: {domain}'}
+
+            # Handle fields as string
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid fields format: {fields}'}
+
             records = Model.search(domain, limit=limit)
 
             if fields:
