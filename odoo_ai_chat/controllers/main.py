@@ -188,117 +188,139 @@ class AIChatController(http.Controller):
             }
 
     def _execute_tool_calls(self, session, response, ai_provider, config):
-        """Execute MCP tool calls and get final AI response"""
-        tool_calls = response.get('tool_calls', [])
+        """Execute MCP tool calls and get final AI response, looping if more tools are needed"""
         current_messages = response.get('messages', [])
-
         Message = http.request.env['ai.chat.message']
         mcp_registry = http.request.env['mcp.server.registry']
+        tools = mcp_registry.list_tools()
 
         graph_data = None
+        max_iterations = 5  # Prevent infinite loops
+        iteration = 0
 
-        # Execute each tool call and save results immediately
-        # This ensures tool results are saved even if later steps fail
-        for tool_call in tool_calls:
+        # Loop to handle multiple rounds of tool calls
+        while iteration < max_iterations:
+            tool_calls = response.get('tool_calls', [])
+
+            if not tool_calls:
+                # No more tool calls, we're done
+                break
+
+            iteration += 1
+            _logger.info(f"Tool execution iteration {iteration}: processing {len(tool_calls)} tool calls")
+
+            # Execute each tool call and save results immediately
+            for tool_call in tool_calls:
+                try:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call['arguments']
+                    tool_call_id = tool_call['tool_call_id']
+
+                    _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+
+                    # Execute tool via MCP
+                    tool_result = mcp_registry.call_tool(tool_name, tool_args)
+
+                    # Log errors from tool execution
+                    if not tool_result.get('success'):
+                        _logger.error(f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}")
+
+                    # Extract graph data if this was a generate_graph call
+                    if tool_name == 'generate_graph' and tool_result.get('success'):
+                        graph_data = tool_result.get('graph_data')
+
+                    # Add tool result to messages
+                    current_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tool_call_id,
+                        'name': tool_name,
+                        'content': json.dumps(tool_result, cls=OdooJSONEncoder)
+                    })
+
+                    # Save tool result message IMMEDIATELY
+                    metadata = {'tool_name': tool_name}
+                    if graph_data:
+                        metadata['graph_data'] = graph_data
+
+                    Message.create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(tool_result, cls=OdooJSONEncoder),
+                        'tool_call_id': tool_call_id,
+                        'metadata': json.dumps(metadata)
+                    })
+
+                    # Commit after each tool result
+                    http.request.env.cr.commit()
+
+                except Exception as e:
+                    _logger.exception(f"Error executing tool {tool_name}")
+                    # Save error as tool result to maintain message integrity
+                    error_result = {'success': False, 'error': str(e)}
+                    current_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tool_call_id,
+                        'name': tool_name,
+                        'content': json.dumps(error_result)
+                    })
+                    Message.create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(error_result),
+                        'tool_call_id': tool_call_id,
+                        'metadata': json.dumps({'tool_name': tool_name, 'error': True})
+                    })
+                    http.request.env.cr.commit()
+
+            # After executing tools, ask AI if it wants to call more tools or provide final response
             try:
-                tool_name = tool_call['name']
-                tool_args = tool_call['arguments']
-                tool_call_id = tool_call['tool_call_id']
+                _logger.info(f"Calling AI after tool execution to check for more tool calls")
 
-                _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                # Call chat_with_tools again - this allows the AI to see tool results
+                # and decide whether to call more tools or provide a final response
+                response = ai_provider.chat_with_tools(
+                    messages=current_messages,
+                    mcp_tools=tools
+                )
 
-                # Execute tool via MCP
-                tool_result = mcp_registry.call_tool(tool_name, tool_args)
+                # If the AI wants to execute more tools, loop will continue
+                if response.get('requires_tool_execution'):
+                    # Save the assistant message with new tool calls
+                    tool_calls_for_display = response.get('tool_calls', [])
+                    Message.create({
+                        'session_id': session.id,
+                        'role': 'assistant',
+                        'content': response.get('message') or '',
+                        'tool_calls': json.dumps(tool_calls_for_display)
+                    })
+                    http.request.env.cr.commit()
+                    # Update current_messages for next iteration
+                    current_messages = response.get('messages', current_messages)
+                    continue  # Loop back to execute more tools
 
-                # Log errors from tool execution
-                if not tool_result.get('success'):
-                    _logger.error(f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}")
-
-                # Extract graph data if this was a generate_graph call
-                if tool_name == 'generate_graph' and tool_result.get('success'):
-                    graph_data = tool_result.get('graph_data')
-
-                # Add tool result to messages
-                current_messages.append({
-                    'role': 'tool',
-                    'tool_call_id': tool_call_id,
-                    'name': tool_name,
-                    'content': json.dumps(tool_result, cls=OdooJSONEncoder)
-                })
-
-                # Save tool result message IMMEDIATELY to ensure it's persisted
-                # even if subsequent steps fail
-                metadata = {'tool_name': tool_name}
-                if graph_data:
-                    metadata['graph_data'] = graph_data
-
-                Message.create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(tool_result, cls=OdooJSONEncoder),
-                    'tool_call_id': tool_call_id,
-                    'metadata': json.dumps(metadata)
-                })
-
-                # Commit after each tool result to prevent orphaned tool_calls
-                http.request.env.cr.commit()
+                # No more tool calls - AI provided final response
+                _logger.info(f"AI provided final response after {iteration} tool execution rounds")
+                return {
+                    'success': True,
+                    'message': response.get('message', ''),
+                    'graph_data': graph_data
+                }
 
             except Exception as e:
-                _logger.exception(f"Error executing tool {tool_name}")
-                # Save error as tool result to maintain message integrity
-                error_result = {'success': False, 'error': str(e)}
-                current_messages.append({
-                    'role': 'tool',
-                    'tool_call_id': tool_call_id,
-                    'name': tool_name,
-                    'content': json.dumps(error_result)
-                })
-                Message.create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(error_result),
-                    'tool_call_id': tool_call_id,
-                    'metadata': json.dumps({'tool_name': tool_name, 'error': True})
-                })
-                http.request.env.cr.commit()
+                _logger.exception("Error in tool execution loop")
+                return {
+                    'success': True,  # Tool results are saved
+                    'message': f"I encountered an error while processing: {str(e)}",
+                    'graph_data': graph_data
+                }
 
-        # Get final response from AI after tool execution
-        try:
-            _logger.info(f"Getting final AI response after executing {len(tool_calls)} tools")
-
-            # Add a helpful system message to guide the AI's final response
-            # This ensures the AI provides a comprehensive summary
-            current_messages.append({
-                'role': 'system',
-                'content': 'Based on the tool execution results above, provide a clear and comprehensive summary of what was accomplished. If the user requested multiple tasks, explain what you completed and what remains.'
-            })
-
-            final_response = ai_provider.chat(
-                messages=current_messages,
-                temperature=config['temperature'],
-                max_tokens=config['max_tokens']
-            )
-
-            choice = final_response.get('choices', [{}])[0]
-            final_message = choice.get('message', {}).get('content', '')
-
-            _logger.info(f"Final AI response received: {final_message[:100]}...")
-
-            return {
-                'success': True,
-                'message': final_message,
-                'graph_data': graph_data
-            }
-
-        except Exception as e:
-            _logger.exception("Error getting final AI response after tool execution")
-            # Return a user-friendly error message
-            # Tool results are already saved, so conversation state is valid
-            return {
-                'success': True,  # Return success since tool results are saved
-                'message': f"I encountered an error while processing the tool results: {str(e)}",
-                'graph_data': graph_data
-            }
+        # Max iterations reached
+        _logger.warning(f"Reached maximum tool execution iterations ({max_iterations})")
+        return {
+            'success': True,
+            'message': "I've completed the available tool operations. Some tasks may require additional steps.",
+            'graph_data': graph_data
+        }
 
     @http.route('/ai_chat/get_sessions', type='json', auth='user')
     def get_sessions(self, limit=20, **kwargs):
