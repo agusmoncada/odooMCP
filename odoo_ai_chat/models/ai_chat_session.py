@@ -79,16 +79,31 @@ class AIChatSession(models.Model):
         self.ensure_one()
         messages = []
 
-        # Track which tool_call_ids have responses
+        # Track which tool_call_ids have responses AND which were requested
         tool_call_ids_with_responses = set()
+        tool_call_ids_requested = set()
+
         for msg in self.message_ids:
             if msg.role == 'tool' and msg.tool_call_id:
                 tool_call_ids_with_responses.add(msg.tool_call_id)
+            elif msg.role == 'assistant' and msg.tool_calls:
+                try:
+                    tool_calls_data = json.loads(msg.tool_calls)
+                    for tc in tool_calls_data:
+                        if tc.get('tool_call_id'):
+                            tool_call_ids_requested.add(tc['tool_call_id'])
+                except (json.JSONDecodeError, KeyError):
+                    pass
 
         for msg in self.message_ids.sorted('create_date'):
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
                 _logger.warning(f"Skipping tool message {msg.id} without tool_call_id")
+                continue
+
+            # Skip orphaned tool messages (tool_call_id not requested by any assistant message)
+            if msg.role == 'tool' and msg.tool_call_id not in tool_call_ids_requested:
+                _logger.warning(f"Skipping orphaned tool message {msg.id} with tool_call_id {msg.tool_call_id} - no corresponding assistant message")
                 continue
 
             message_dict = {
