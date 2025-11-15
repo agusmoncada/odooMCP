@@ -75,15 +75,36 @@ class PDFInvoiceProcessor:
 
         try:
             pdf_file = io.BytesIO(pdf_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
 
-            _logger.info(f"Processing PDF with {len(pdf_reader.pages)} pages")
+            # Support both old and new PyPDF2 API
+            try:
+                # Try new API (PyPDF2 >= 3.0)
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+            except AttributeError:
+                # Fall back to old API (PyPDF2 < 3.0)
+                pdf_reader = PyPDF2.PdfFileReader(pdf_file)
 
-            for page_num, page in enumerate(pdf_reader.pages, 1):
+            # Handle pages differently for old/new API
+            try:
+                # New API
+                num_pages = len(pdf_reader.pages)
+                pages = pdf_reader.pages
+            except AttributeError:
+                # Old API
+                num_pages = pdf_reader.numPages
+                pages = [pdf_reader.getPage(i) for i in range(num_pages)]
+
+            _logger.info(f"Processing PDF with {num_pages} pages")
+
+            for page_num, page in enumerate(pages, 1):
                 _logger.info(f"Extracting text from page {page_num}")
 
-                # Extract text from page
-                text = page.extract_text()
+                # Extract text from page (both APIs use extractText or extract_text)
+                try:
+                    text = page.extract_text()  # New API
+                except AttributeError:
+                    text = page.extractText()  # Old API
+
                 if text and text.strip():
                     text_parts.append(text)
 
