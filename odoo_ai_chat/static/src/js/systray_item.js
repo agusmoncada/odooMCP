@@ -18,12 +18,12 @@ export class AIChatSystrayItem extends Component {
      * Open AI Chat Widget
      */
     async openChat() {
-        // Open the AI chat in a dialog
+        // Open the AI chat in fullscreen mode (no header/footer)
         this.action.doAction({
             type: "ir.actions.client",
             tag: "ai_chat_widget",
             name: "AI Chat Assistant",
-            target: "new",
+            target: "fullscreen",
         });
     }
 }

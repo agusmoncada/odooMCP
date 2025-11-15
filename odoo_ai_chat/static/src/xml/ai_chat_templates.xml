@@ -95,14 +95,6 @@
                                         <div class="o_ai_chat_message_time">
                                             <t t-esc="formatDate(message.create_date)"/>
                                         </div>
-                                        <t t-if="message.tool_calls">
-                                            <div class="o_ai_chat_tool_calls">
-                                                <small class="text-muted">
-                                                    <i class="fa fa-wrench"/>
-                                                    <t t-esc="getMessageTypeIndicator(message) || 'Used tools'"/>
-                                                </small>
-                                            </div>
-                                        </t>
                                     </div>
                                 </div>
                             </t>

@@ -126,10 +126,19 @@
         <field name="view_mode">tree,form</field>
     </record>
 
+    <!-- Client Action for AI Chat Widget -->
+    <record id="action_ai_chat_open" model="ir.actions.client">
+        <field name="name">AI Chat Assistant</field>
+        <field name="tag">ai_chat_widget</field>
+        <field name="target">fullscreen</field>
+    </record>
+
     <!-- Menu Items -->
     <menuitem id="menu_ai_chat_root"
               name="AI Chat"
-              sequence="100"/>
+              web_icon="odoo_ai_chat,static/description/icon.png"
+              sequence="100"
+              action="action_ai_chat_open"/>
 
     <menuitem id="menu_ai_chat_sessions"
               name="Chat Sessions"
