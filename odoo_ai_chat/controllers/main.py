@@ -189,17 +189,18 @@ class AIChatController(http.Controller):
 
     def _execute_tool_calls(self, session, response, ai_provider, config):
         """Execute MCP tool calls and get final AI response"""
-        try:
-            tool_calls = response.get('tool_calls', [])
-            current_messages = response.get('messages', [])
+        tool_calls = response.get('tool_calls', [])
+        current_messages = response.get('messages', [])
 
-            Message = http.request.env['ai.chat.message']
-            mcp_registry = http.request.env['mcp.server.registry']
+        Message = http.request.env['ai.chat.message']
+        mcp_registry = http.request.env['mcp.server.registry']
 
-            graph_data = None
+        graph_data = None
 
-            # Execute each tool call
-            for tool_call in tool_calls:
+        # Execute each tool call and save results immediately
+        # This ensures tool results are saved even if later steps fail
+        for tool_call in tool_calls:
+            try:
                 tool_name = tool_call['name']
                 tool_args = tool_call['arguments']
                 tool_call_id = tool_call['tool_call_id']
@@ -225,7 +226,8 @@ class AIChatController(http.Controller):
                     'content': json.dumps(tool_result, cls=OdooJSONEncoder)
                 })
 
-                # Save tool result message
+                # Save tool result message IMMEDIATELY to ensure it's persisted
+                # even if subsequent steps fail
                 metadata = {'tool_name': tool_name}
                 if graph_data:
                     metadata['graph_data'] = graph_data
@@ -238,7 +240,30 @@ class AIChatController(http.Controller):
                     'metadata': json.dumps(metadata)
                 })
 
-            # Get final response from AI after tool execution
+                # Commit after each tool result to prevent orphaned tool_calls
+                http.request.env.cr.commit()
+
+            except Exception as e:
+                _logger.exception(f"Error executing tool {tool_name}")
+                # Save error as tool result to maintain message integrity
+                error_result = {'success': False, 'error': str(e)}
+                current_messages.append({
+                    'role': 'tool',
+                    'tool_call_id': tool_call_id,
+                    'name': tool_name,
+                    'content': json.dumps(error_result)
+                })
+                Message.create({
+                    'session_id': session.id,
+                    'role': 'tool',
+                    'content': json.dumps(error_result),
+                    'tool_call_id': tool_call_id,
+                    'metadata': json.dumps({'tool_name': tool_name, 'error': True})
+                })
+                http.request.env.cr.commit()
+
+        # Get final response from AI after tool execution
+        try:
             final_response = ai_provider.chat(
                 messages=current_messages,
                 temperature=config['temperature'],
@@ -255,10 +280,13 @@ class AIChatController(http.Controller):
             }
 
         except Exception as e:
-            _logger.exception("Error executing tool calls")
+            _logger.exception("Error getting final AI response after tool execution")
+            # Return a user-friendly error message
+            # Tool results are already saved, so conversation state is valid
             return {
-                'success': False,
-                'error': f'Tool execution error: {str(e)}'
+                'success': True,  # Return success since tool results are saved
+                'message': f"I encountered an error while processing the tool results: {str(e)}",
+                'graph_data': graph_data
             }
 
     @http.route('/ai_chat/get_sessions', type='json', auth='user')
