@@ -195,7 +195,7 @@ class AIChatController(http.Controller):
         tools = mcp_registry.list_tools()
 
         graph_data = None
-        max_iterations = 5  # Prevent infinite loops
+        max_iterations = 10  # Prevent infinite loops (allows batching up to 10 operations)
         iteration = 0
 
         # Loop to handle multiple rounds of tool calls
@@ -276,6 +276,23 @@ class AIChatController(http.Controller):
             try:
                 _logger.info(f"Calling AI after tool execution to check for more tool calls")
 
+                # Check if we're at max iterations before calling AI again
+                if iteration >= max_iterations:
+                    _logger.warning(f"Reached maximum tool execution iterations ({max_iterations})")
+                    # Ask for final summary without allowing more tool calls
+                    final_response = ai_provider.chat(
+                        messages=current_messages,
+                        temperature=config['temperature'],
+                        max_tokens=config['max_tokens']
+                    )
+                    choice = final_response.get('choices', [{}])[0]
+                    final_message = choice.get('message', {}).get('content', '')
+                    return {
+                        'success': True,
+                        'message': final_message or "I've completed the available tool operations.",
+                        'graph_data': graph_data
+                    }
+
                 # Call chat_with_tools again - this allows the AI to see tool results
                 # and decide whether to call more tools or provide a final response
                 response = ai_provider.chat_with_tools(
@@ -314,11 +331,11 @@ class AIChatController(http.Controller):
                     'graph_data': graph_data
                 }
 
-        # Max iterations reached
-        _logger.warning(f"Reached maximum tool execution iterations ({max_iterations})")
+        # This should never be reached due to the iteration check above
+        _logger.warning(f"Exited tool execution loop unexpectedly")
         return {
             'success': True,
-            'message': "I've completed the available tool operations. Some tasks may require additional steps.",
+            'message': "Tool execution completed.",
             'graph_data': graph_data
         }
 
