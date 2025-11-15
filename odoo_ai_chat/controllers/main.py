@@ -371,6 +371,15 @@ class AIChatController(http.Controller):
 
             messages = []
             for m in session.message_ids.sorted('create_date'):
+                # Skip tool result messages - they're technical implementation details
+                if m.role == 'tool':
+                    continue
+
+                # Also skip assistant messages with tool_calls but no content
+                # (these are intermediate coordination messages)
+                if m.role == 'assistant' and m.tool_calls and not m.content:
+                    continue
+
                 msg_data = {
                     'id': m.id,
                     'role': m.role,
