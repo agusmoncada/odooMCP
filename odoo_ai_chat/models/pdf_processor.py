@@ -46,10 +46,16 @@ class PDFInvoiceProcessor:
             # Extract text from PDF
             text = self._extract_text(pdf_content)
 
-            if not text or len(text.strip()) < 50:
+            # Log what we extracted for debugging
+            text_length = len(text.strip()) if text else 0
+            _logger.info(f"Extracted {text_length} characters from PDF: {filename}")
+            if text:
+                _logger.info(f"First 200 chars: {text[:200]}")
+
+            if not text or text_length < 50:
                 return {
                     'success': False,
-                    'error': 'Could not extract sufficient text from PDF. The PDF might be image-based or empty.'
+                    'error': f'Could not extract sufficient text from PDF ({text_length} characters found). This PDF appears to be scanned/image-based. Please use a text-based PDF or a PDF with OCR text layer. For scanned documents, you may need to OCR the PDF first using an external tool.'
                 }
 
             # Use AI to parse the invoice text
