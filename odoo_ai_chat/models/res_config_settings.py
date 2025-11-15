@@ -197,12 +197,17 @@ CREATE (use create_record):
             ICP.set_param('odoo_ai_chat.cached_models', json.dumps(cached_models))
             ICP.set_param('odoo_ai_chat.models_last_update', fields.Datetime.now())
 
+            # Invalidate cache to force recomputation of selection field
+            self.env['ir.config_parameter'].invalidate_cache()
+            self.invalidate_cache()
+
+            # Return notification
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
                 'params': {
                     'title': _('Success'),
-                    'message': _('Successfully fetched %d models from OpenRouter.') % len(cached_models),
+                    'message': _('Successfully fetched %d models from OpenRouter API.  ') % len(cached_models),
                     'type': 'success',
                     'sticky': False,
                 }
