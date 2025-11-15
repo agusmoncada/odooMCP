@@ -265,6 +265,14 @@ class AIChatController(http.Controller):
         # Get final response from AI after tool execution
         try:
             _logger.info(f"Getting final AI response after executing {len(tool_calls)} tools")
+
+            # Add a helpful system message to guide the AI's final response
+            # This ensures the AI provides a comprehensive summary
+            current_messages.append({
+                'role': 'system',
+                'content': 'Based on the tool execution results above, provide a clear and comprehensive summary of what was accomplished. If the user requested multiple tasks, explain what you completed and what remains.'
+            })
+
             final_response = ai_provider.chat(
                 messages=current_messages,
                 temperature=config['temperature'],
