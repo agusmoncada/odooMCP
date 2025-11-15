@@ -67,6 +67,7 @@ class AIChatController(http.Controller):
             config = request.env['res.config.settings'].get_ai_config()
 
             if not config['api_key']:
+                _logger.error("OpenRouter API key not configured")
                 return {
                     'error': 'OpenRouter API key not configured. Please configure it in Settings > AI Chat.'
                 }
