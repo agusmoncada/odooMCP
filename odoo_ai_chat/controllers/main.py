@@ -208,6 +208,10 @@ class AIChatController(http.Controller):
                 # Execute tool via MCP
                 tool_result = mcp_registry.call_tool(tool_name, tool_args)
 
+                # Log errors from tool execution
+                if not tool_result.get('success'):
+                    _logger.error(f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}")
+
                 # Extract graph data if this was a generate_graph call
                 if tool_name == 'generate_graph' and tool_result.get('success'):
                     graph_data = tool_result.get('graph_data')
