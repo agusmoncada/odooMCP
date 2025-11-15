@@ -507,6 +507,10 @@ class MCPServerRegistry(models.AbstractModel):
             if db_name not in _mcp_server_cache:
                 _logger.info(f"Creating new MCP server instance for database: {db_name}")
                 _mcp_server_cache[db_name] = MCPServer(self.env)
+            else:
+                # Refresh the environment to avoid stale cursor issues
+                _mcp_server_cache[db_name].env = self.env
+
             return _mcp_server_cache[db_name]
 
     @api.model
