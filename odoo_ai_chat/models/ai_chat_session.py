@@ -8,6 +8,7 @@ class AIChatSession(models.Model):
 
     _name = 'ai.chat.session'
     _description = 'AI Chat Session'
+    _inherit = ['mail.thread']
     _order = 'create_date desc'
 
     name = fields.Char(
@@ -22,6 +23,13 @@ class AIChatSession(models.Model):
         required=True,
         default=lambda self: self.env.user,
         ondelete='cascade'
+    )
+
+    channel_id = fields.Many2one(
+        'mail.channel',
+        string='Discuss Channel',
+        help='Linked Discuss channel for this session',
+        ondelete='set null'
     )
 
     message_ids = fields.One2many(
@@ -69,6 +77,101 @@ class AIChatSession(models.Model):
     def action_unarchive(self):
         """Unarchive this chat session"""
         self.write({'active': True})
+
+    def _get_ai_bot_partner(self):
+        """Get or create AI bot partner"""
+        bot = self.env['res.partner'].sudo().search([
+            ('name', '=', 'AI Assistant Bot'),
+            ('email', '=', 'ai.assistant@odoo.local')
+        ], limit=1)
+
+        if not bot:
+            bot = self.env['res.partner'].sudo().create({
+                'name': 'AI Assistant Bot',
+                'email': 'ai.assistant@odoo.local',
+                'active': True,
+                'is_company': False,
+                'type': 'contact',
+            })
+
+        return bot
+
+    def action_create_discuss_channel(self):
+        """Create or link to a Discuss channel"""
+        self.ensure_one()
+
+        if self.channel_id:
+            # Channel already exists, just open it
+            return {
+                'type': 'ir.actions.act_window',
+                'res_model': 'mail.channel',
+                'res_id': self.channel_id.id,
+                'view_mode': 'form',
+                'target': 'current',
+            }
+
+        # Create new AI channel
+        ai_bot = self._get_ai_bot_partner()
+
+        channel = self.env['mail.channel'].create({
+            'name': f'AI Assistant: {self.name}',
+            'description': f'AI chat session linked to {self.name}',
+            'public': 'private',
+            'email_send': False,
+            'channel_partner_ids': [
+                (4, self.env.user.partner_id.id),
+                (4, ai_bot.id)
+            ],
+        })
+
+        self.channel_id = channel
+
+        # Sync existing messages to the channel
+        for msg in self.message_ids.filtered(lambda m: m.role in ('user', 'assistant')):
+            author = self.env.user.partner_id if msg.role == 'user' else ai_bot
+            channel.message_post(
+                body=msg.content,
+                author_id=author.id,
+                message_type='comment',
+                subtype_xmlid='mail.mt_comment'
+            )
+
+        return {
+            'type': 'ir.actions.act_window',
+            'res_model': 'mail.channel',
+            'res_id': channel.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
+    @api.model
+    def get_or_create_ai_channel_for_user(self):
+        """Get or create a personal AI channel for the current user"""
+        # Look for existing AI channel
+        channel = self.env['mail.channel'].search([
+            ('name', '=', f'AI Assistant - {self.env.user.name}'),
+            ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
+        ], limit=1)
+
+        if channel:
+            return channel
+
+        # Create new AI channel
+        ai_bot = self._get_ai_bot_partner()
+
+        channel = self.env['mail.channel'].create({
+            'name': f'AI Assistant - {self.env.user.name}',
+            'description': 'Personal AI Assistant powered by OpenRouter',
+            'public': 'private',
+            'email_send': False,
+            'channel_type': 'chat',
+            'channel_partner_ids': [
+                (4, self.env.user.partner_id.id),
+                (4, ai_bot.id)
+            ],
+        })
+
+        return channel
 
     def get_messages_for_api(self):
         """Get messages formatted for AI API"""

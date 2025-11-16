@@ -21,15 +21,30 @@
         <field name="arch" type="xml">
             <form string="AI Chat Session">
                 <header>
+                    <button name="action_create_discuss_channel"
+                            string="Open in Discuss"
+                            type="object"
+                            class="btn-primary"
+                            attrs="{'invisible': [('channel_id', '!=', False)]}"/>
+                    <button name="action_create_discuss_channel"
+                            string="View in Discuss"
+                            type="object"
+                            class="btn-secondary"
+                            attrs="{'invisible': [('channel_id', '=', False)]}"/>
                     <button name="action_archive" string="Archive" type="object" class="btn-secondary"/>
                 </header>
                 <sheet>
                     <group>
-                        <field name="name"/>
-                        <field name="user_id"/>
-                        <field name="message_count"/>
-                        <field name="last_message_date"/>
-                        <field name="active"/>
+                        <group>
+                            <field name="name"/>
+                            <field name="user_id"/>
+                            <field name="message_count"/>
+                        </group>
+                        <group>
+                            <field name="last_message_date"/>
+                            <field name="channel_id" readonly="1"/>
+                            <field name="active"/>
+                        </group>
                     </group>
                     <notebook>
                         <page string="Messages">
@@ -43,6 +58,10 @@
                         </page>
                     </notebook>
                 </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" widget="mail_followers"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
             </form>
         </field>
     </record>
@@ -133,12 +152,39 @@
         <field name="target">current</field>
     </record>
 
+    <!-- Server Action to Open AI Discuss Channel -->
+    <record id="action_open_ai_discuss_channel" model="ir.actions.server">
+        <field name="name">AI Assistant (Discuss)</field>
+        <field name="model_id" ref="model_ai_chat_session"/>
+        <field name="state">code</field>
+        <field name="code">
+# Get or create AI channel for current user
+channel = model.get_or_create_ai_channel_for_user()
+
+# Open the channel in Discuss
+action = {
+    'type': 'ir.actions.act_window',
+    'res_model': 'mail.channel',
+    'res_id': channel.id,
+    'view_mode': 'form',
+    'target': 'current',
+    'views': [(False, 'form')],
+}
+        </field>
+    </record>
+
     <!-- Menu Items -->
     <menuitem id="menu_ai_chat_root"
               name="AI Chat"
               web_icon="odoo_ai_chat,static/description/icon.png"
               sequence="100"
               action="action_ai_chat_open"/>
+
+    <menuitem id="menu_ai_chat_discuss"
+              name="AI Assistant (Discuss)"
+              parent="menu_ai_chat_root"
+              action="action_open_ai_discuss_channel"
+              sequence="5"/>
 
     <menuitem id="menu_ai_chat_sessions"
               name="Chat Sessions"

@@ -27,13 +27,15 @@ class AIChatController(http.Controller):
     """Controller for AI Chat endpoints"""
 
     @http.route('/ai_chat/send_message', type='json', auth='user')
-    def send_message(self, session_id=None, message=None, **kwargs):
+    def send_message(self, session_id=None, message=None, view_context=None, user_context=None, **kwargs):
         """
         Send a message to the AI and get a response
 
         Args:
             session_id: ID of the chat session (creates new if None)
             message: User message text
+            view_context: Current view/module/action context (optional)
+            user_context: User language, timezone, etc. (optional)
 
         Returns:
             Dict with response data
@@ -83,11 +85,16 @@ class AIChatController(http.Controller):
             # Prepare messages for AI
             messages = []
 
-            # Add system prompt
-            if config['system_prompt']:
+            # Add context-aware system prompt
+            system_prompt = self._build_context_aware_prompt(
+                config['system_prompt'],
+                view_context=view_context,
+                user_context=user_context
+            )
+            if system_prompt:
                 messages.append({
                     'role': 'system',
-                    'content': config['system_prompt']
+                    'content': system_prompt
                 })
 
             # Add conversation history
@@ -330,6 +337,119 @@ class AIChatController(http.Controller):
             'message': "Tool execution completed.",
             'graph_data': graph_data
         }
+
+    def _build_context_aware_prompt(self, base_prompt, view_context=None, user_context=None):
+        """Build context-aware system prompt with user and view context"""
+        context_parts = [base_prompt] if base_prompt else []
+
+        # Add user context
+        user = request.env.user
+        context_parts.append(f"""
+USER CONTEXT:
+- Name: {user.name}
+- Language: {user.lang}
+- Timezone: {user.tz or 'UTC'}
+- Company: {user.company_id.name if user.company_id else 'N/A'}
+- Email: {user.email or 'N/A'}
+
+IMPORTANT LANGUAGE INSTRUCTION:
+You MUST respond in the user's configured language ({user.lang}).
+- If the language is Spanish (es_ES, es_MX, es_AR, etc.), respond in Spanish.
+- If the language is French (fr_FR, fr_CA, etc.), respond in French.
+- If the language is English (en_US, en_GB, etc.), respond in English.
+- And so on for other languages.
+Only use a different language if the user explicitly requests it.
+""")
+
+        # Add view context if provided
+        if view_context:
+            current_model = view_context.get('model')
+            action_name = view_context.get('action_name')
+            active_id = view_context.get('active_id')
+            view_type = view_context.get('view_type')
+
+            if current_model or action_name:
+                context_section = "\nCURRENT VIEW CONTEXT:"
+
+                if action_name:
+                    context_section += f"\n- User is currently in: {action_name}"
+
+                if current_model:
+                    context_section += f"\n- Working with model: {current_model}"
+
+                if view_type:
+                    context_section += f"\n- View type: {view_type}"
+
+                if active_id and current_model:
+                    # Try to get record name for better context
+                    try:
+                        record = request.env[current_model].browse(active_id)
+                        if record.exists():
+                            record_name = record.display_name or record.name if hasattr(record, 'name') else str(active_id)
+                            context_section += f"\n- Looking at record: {record_name} (ID: {active_id})"
+                    except Exception as e:
+                        _logger.debug(f"Could not fetch record context: {e}")
+                        context_section += f"\n- Active record ID: {active_id}"
+
+                context_section += "\n\nThe user is likely asking about something related to this view or record. Consider this context when providing assistance."
+                context_parts.append(context_section)
+
+        # Add user permissions context (optional, lightweight)
+        try:
+            permissions = []
+            if user.has_group('base.group_system'):
+                permissions.append('System Administrator')
+            if user.has_group('sales_team.group_sale_manager'):
+                permissions.append('Sales Manager')
+            if user.has_group('account.group_account_manager'):
+                permissions.append('Accounting Manager')
+
+            if permissions:
+                context_parts.append(f"\nUSER PERMISSIONS: {', '.join(permissions)}")
+        except Exception as e:
+            _logger.debug(f"Could not fetch user permissions: {e}")
+
+        return "\n".join(context_parts)
+
+    @http.route('/ai_chat/get_user_context', type='json', auth='user')
+    def get_user_context(self, **kwargs):
+        """Get comprehensive user context for AI"""
+        try:
+            user = request.env.user
+
+            # Basic user info
+            user_context_data = {
+                'id': user.id,
+                'name': user.name,
+                'login': user.login,
+                'email': user.email,
+                'lang': user.lang,
+                'tz': user.tz or 'UTC',
+            }
+
+            # Company info
+            if user.company_id:
+                user_context_data['company'] = {
+                    'id': user.company_id.id,
+                    'name': user.company_id.name,
+                }
+
+            # Check specific permissions
+            user_context_data['permissions'] = {
+                'is_admin': user.has_group('base.group_system'),
+                'is_sales_user': user.has_group('sales_team.group_sale_salesman') if request.env['ir.model'].search([('model', '=', 'sales_team')]) else False,
+                'is_sales_manager': user.has_group('sales_team.group_sale_manager') if request.env['ir.model'].search([('model', '=', 'sales_team')]) else False,
+                'is_accounting_user': user.has_group('account.group_account_user') if request.env['ir.model'].search([('model', '=', 'account')]) else False,
+            }
+
+            return {
+                'success': True,
+                'user_context': user_context_data
+            }
+
+        except Exception as e:
+            _logger.exception("Error getting user context")
+            return {'success': False, 'error': str(e)}
 
     @http.route('/ai_chat/get_sessions', type='json', auth='user')
     def get_sessions(self, limit=20, **kwargs):

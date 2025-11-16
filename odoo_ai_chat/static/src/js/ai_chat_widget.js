@@ -13,6 +13,7 @@ export class AIChatWidget extends Component {
     setup() {
         this.aiChat = useService("ai_chat");
         this.notification = useService("notification");
+        this.action = useService("action");
 
         this.state = useState({
             messages: [],
@@ -108,6 +109,47 @@ export class AIChatWidget extends Component {
     }
 
     /**
+     * Get current view context
+     */
+    getCurrentContext() {
+        try {
+            const currentController = this.action.currentController;
+
+            if (!currentController) {
+                return null;
+            }
+
+            const action = currentController.action;
+            const props = currentController.props;
+
+            return {
+                // Current model being viewed
+                model: action.res_model || props.resModel,
+
+                // Action ID and name
+                action_id: action.id,
+                action_name: action.name || action.display_name,
+
+                // Current record(s) if viewing specific records
+                active_id: action.context?.active_id,
+                active_ids: action.context?.active_ids || [],
+
+                // View type (form, list, kanban, etc.)
+                view_type: props.type || action.view_mode,
+
+                // Domain filter currently applied
+                domain: action.domain,
+
+                // Full action context
+                context: action.context || {},
+            };
+        } catch (error) {
+            console.debug("Could not get current view context:", error);
+            return null;
+        }
+    }
+
+    /**
      * Send a message
      */
     async sendMessage() {
@@ -118,10 +160,14 @@ export class AIChatWidget extends Component {
             this.state.loading = true;
             this.state.inputMessage = "";
 
+            // Get current view context
+            const viewContext = this.getCurrentContext();
+
             // Send to backend (service will handle adding messages)
             const result = await this.aiChat.sendMessage(
                 message,
-                this.state.currentSessionId
+                this.state.currentSessionId,
+                viewContext
             );
 
             if (result.success) {

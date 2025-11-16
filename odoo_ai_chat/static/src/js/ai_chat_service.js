@@ -19,11 +19,12 @@ export const aiChatService = {
         /**
          * Send a message to the AI
          */
-        async function sendMessage(message, sessionId = null) {
+        async function sendMessage(message, sessionId = null, viewContext = null) {
             try {
                 const result = await rpc("/ai_chat/send_message", {
                     session_id: sessionId || currentSessionId,
                     message: message,
+                    view_context: viewContext,
                 });
 
                 if (result.success) {
