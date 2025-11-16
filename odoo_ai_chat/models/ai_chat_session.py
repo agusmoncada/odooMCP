@@ -151,7 +151,7 @@ class AIChatSession(models.Model):
         # Look for existing AI channel - a chat with both the user and AI bot
         channel = self.env['mail.channel'].search([
             ('channel_type', '=', 'chat'),
-            ('channel_partner_ids', 'in', [ai_bot.id]),
+            ('is_ai_channel', '=', True),
             ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
         ], limit=1)
 
@@ -163,11 +163,20 @@ class AIChatSession(models.Model):
             'name': f'AI Assistant',
             'description': 'Personal AI Assistant powered by OpenRouter',
             'channel_type': 'chat',
+            'is_ai_channel': True,  # Explicitly set this flag
             'channel_partner_ids': [
                 (4, self.env.user.partner_id.id),
                 (4, ai_bot.id)
             ],
         })
+
+        # Create linked AI session
+        session = self.create({
+            'name': 'AI Assistant Chat',
+            'user_id': self.env.user.id,
+            'channel_id': channel.id,
+        })
+        channel.ai_session_id = session.id
 
         return channel
 
