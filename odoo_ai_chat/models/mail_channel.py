@@ -78,7 +78,9 @@ class MailChannel(models.Model):
         # Only process if message is from user, not from AI bot
         # Also skip if AI bot not found to prevent errors
         if ai_bot and message.author_id.id != ai_bot.id:
-            _logger.info(f"Processing AI message from user, starting async thread")
+            import time
+            start_time = time.time()
+            _logger.info(f"[TIMING] Message received at {start_time}, starting async thread")
             # Get message content before starting thread (avoid cursor issues)
             message_body = message.body or ''
             _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_body_length={len(message_body)}")
@@ -86,11 +88,12 @@ class MailChannel(models.Model):
             # Use threading to process in background with a new cursor
             thread = threading.Thread(
                 target=self._process_ai_message_async,
-                args=(self.env.cr.dbname, self.env.uid, self.id, message_body)
+                args=(self.env.cr.dbname, self.env.uid, self.id, message_body, start_time)
             )
             thread.daemon = True
             thread.start()
-            _logger.info(f"Async thread started successfully")
+            thread_start_time = time.time()
+            _logger.info(f"[TIMING] Async thread started at {thread_start_time}, thread start delay: {thread_start_time - start_time:.3f}s")
 
         return message
 
@@ -120,8 +123,12 @@ class MailChannel(models.Model):
 
         return html_content
 
-    def _process_ai_message_async(self, dbname, uid, channel_id, message_body):
+    def _process_ai_message_async(self, dbname, uid, channel_id, message_body, start_time=None):
         """Process AI message asynchronously in a separate thread with new cursor"""
+        import time
+        async_start = time.time()
+        if start_time:
+            _logger.info(f"[TIMING] Async method started, delay from message_post: {async_start - start_time:.3f}s")
         _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}")
 
         max_retries = 3
@@ -144,6 +151,11 @@ class MailChannel(models.Model):
 
                     # Commit the transaction
                     cr.commit()
+                    end_time = time.time()
+                    total_time = end_time - async_start
+                    if start_time:
+                        total_from_message = end_time - start_time
+                        _logger.info(f"[TIMING] Total processing time: {total_time:.2f}s, Total from message_post: {total_from_message:.2f}s")
                     _logger.info(f"[ASYNC] Processing complete and committed on attempt {attempt + 1}")
                     break  # Success! Exit the retry loop
 
