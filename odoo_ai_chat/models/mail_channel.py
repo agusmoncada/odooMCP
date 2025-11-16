@@ -217,22 +217,46 @@ class MailChannel(models.Model):
         Args:
             user_message_body: String content of the user's message
         """
+        thinking_message = None
         try:
-            # Show AI bot as "typing" - notify channel members
+            # Get AI bot
             ai_bot = self.env['res.partner'].sudo().search([
                 ('name', '=', 'AI Assistant Bot'),
                 ('email', '=', 'ai.assistant@odoo.local')
             ], limit=1)
 
             if ai_bot:
+                # Post a visible "AI is thinking..." message for immediate user feedback
                 try:
-                    # Trigger typing notification
+                    thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
+                    thinking_message = self.with_context(mail_create_nosubscribe=True).message_post(
+                        body=thinking_body,
+                        author_id=ai_bot.id,
+                        message_type='comment',
+                        subtype_xmlid='mail.mt_comment'
+                    )
+                    _logger.info(f"Posted thinking message {thinking_message.id} to channel {self.id}")
+
+                    # Flush and notify immediately so user sees it
+                    self.env.flush_all()
+                    try:
+                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                            'id': self.id,
+                            'message': thinking_message.message_format()[0]
+                        })
+                        _logger.info(f"Bus notification sent for thinking message")
+                    except Exception as bus_error:
+                        _logger.warning(f"Could not send bus notification for thinking message: {bus_error}")
+                except Exception as e:
+                    _logger.warning(f"Could not post thinking message: {e}")
+
+                # Also try typing notification (might not work for bots, but doesn't hurt)
+                try:
                     self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
                         'channel_id': self.id,
                         'partner_id': ai_bot.id,
                         'is_typing': True,
                     })
-                    _logger.info(f"AI bot typing indicator started for channel {self.id}")
                 except Exception as e:
                     _logger.warning(f"Could not send typing notification: {e}")
 
@@ -321,7 +345,8 @@ class MailChannel(models.Model):
                         openrouter_api_key,
                         openrouter_model,
                         system_prompt,
-                        tools
+                        tools,
+                        thinking_message  # Pass thinking message to be deleted later
                     )
                 else:
                     _logger.info(f"AI response has no tool calls, posting directly to channel")
@@ -331,6 +356,14 @@ class MailChannel(models.Model):
                         'role': 'assistant',
                         'content': content,
                     })
+
+                    # Delete thinking message before posting real response
+                    if thinking_message:
+                        try:
+                            thinking_message.unlink()
+                            _logger.info(f"Deleted thinking message {thinking_message.id}")
+                        except Exception as e:
+                            _logger.warning(f"Could not delete thinking message: {e}")
 
                     # Post AI response to channel
                     ai_bot = self.env['res.partner'].sudo().search([
@@ -373,6 +406,14 @@ class MailChannel(models.Model):
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
+            # Delete thinking message on error
+            if thinking_message:
+                try:
+                    thinking_message.unlink()
+                    _logger.info(f"Deleted thinking message due to error")
+                except Exception as del_error:
+                    _logger.warning(f"Could not delete thinking message on error: {del_error}")
+
             # Post error message to channel with AI bot as author to prevent recursion
             try:
                 ai_bot = self.env['res.partner'].sudo().search([
@@ -488,7 +529,7 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         return response.json()
 
-    def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
+    def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools, thinking_message=None):
         """Process tool calls from AI and get final response
 
         This method implements a loop that allows the AI to make multiple rounds of tool calls
@@ -496,6 +537,9 @@ Remember: Execute ALL required tool calls before providing a final text response
         - Creating customer + project + stages + tags
         - Searching for data, then updating multiple records based on results
         - Any workflow that requires sequential tool execution
+
+        Args:
+            thinking_message: The "AI is thinking..." message to delete before posting final response
         """
         _logger.info(f"Processing {len(tool_calls)} tool calls")
 
@@ -624,6 +668,14 @@ Remember: Execute ALL required tool calls before providing a final text response
                 'role': 'assistant',
                 'content': current_content,
             })
+
+        # Delete thinking message before posting real response
+        if thinking_message:
+            try:
+                thinking_message.unlink()
+                _logger.info(f"Deleted thinking message before posting final response")
+            except Exception as e:
+                _logger.warning(f"Could not delete thinking message: {e}")
 
         # Post final response to channel
         ai_bot = self.env['res.partner'].sudo().search([
