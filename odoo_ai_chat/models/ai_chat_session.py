@@ -116,8 +116,7 @@ class AIChatSession(models.Model):
         channel = self.env['mail.channel'].create({
             'name': f'AI Assistant: {self.name}',
             'description': f'AI chat session linked to {self.name}',
-            'public': 'private',
-            'email_send': False,
+            'channel_type': 'chat',
             'channel_partner_ids': [
                 (4, self.env.user.partner_id.id),
                 (4, ai_bot.id)
@@ -147,9 +146,12 @@ class AIChatSession(models.Model):
     @api.model
     def get_or_create_ai_channel_for_user(self):
         """Get or create a personal AI channel for the current user"""
-        # Look for existing AI channel
+        ai_bot = self._get_ai_bot_partner()
+
+        # Look for existing AI channel - a chat with both the user and AI bot
         channel = self.env['mail.channel'].search([
-            ('name', '=', f'AI Assistant - {self.env.user.name}'),
+            ('channel_type', '=', 'chat'),
+            ('channel_partner_ids', 'in', [ai_bot.id]),
             ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
         ], limit=1)
 
@@ -157,13 +159,9 @@ class AIChatSession(models.Model):
             return channel
 
         # Create new AI channel
-        ai_bot = self._get_ai_bot_partner()
-
         channel = self.env['mail.channel'].create({
-            'name': f'AI Assistant - {self.env.user.name}',
+            'name': f'AI Assistant',
             'description': 'Personal AI Assistant powered by OpenRouter',
-            'public': 'private',
-            'email_send': False,
             'channel_type': 'chat',
             'channel_partner_ids': [
                 (4, self.env.user.partner_id.id),
