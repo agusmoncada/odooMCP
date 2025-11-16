@@ -248,50 +248,12 @@ class MailChannel(models.Model):
 
             if ai_bot:
                 # Post a visible "AI is thinking..." message for immediate user feedback
-                # Wrap in savepoint to prevent serialization errors from aborting the transaction
-                try:
-                    self.env.cr.execute('SAVEPOINT thinking_message')
-                    try:
-                        thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
-                        thinking_message = self.with_context(
-                            mail_create_nosubscribe=True,
-                            mail_channel_noautofollow=True
-                        ).message_post(
-                            body=thinking_body,
-                            author_id=ai_bot.id,
-                            message_type='comment',
-                            subtype_xmlid='mail.mt_comment'
-                        )
-                        thinking_message_id = thinking_message.id
-                        _logger.info(f"Posted thinking message {thinking_message_id} to channel {self.id}")
+                # NOTE: For Discuss channels, we use typing indicator instead
+                # Only use thinking message for non-channel contexts (future: chatter)
+                # This avoids transaction conflicts from concurrent updates
+                thinking_message = None  # Skip thinking message for now
 
-                        # Success - release savepoint and COMMIT immediately
-                        # This makes the thinking message visible to Discuss right away
-                        self.env.cr.execute('RELEASE SAVEPOINT thinking_message')
-                        self.env.cr.commit()
-                        _logger.info(f"Committed thinking message - should be visible in Discuss now")
-
-                        # After commit, clear cache to prevent stale data issues
-                        # Store thinking message ID for later deletion
-                        self.env.clear()
-                        thinking_message = thinking_message_id  # Store ID instead of record
-
-                        # Bus notification is sent automatically on commit by Odoo
-                        # No need for manual notification
-
-                    except Exception as e:
-                        # Failed to post thinking message - rollback savepoint and continue
-                        _logger.warning(f"Could not post thinking message, rolling back: {e}")
-                        self.env.cr.execute('ROLLBACK TO SAVEPOINT thinking_message')
-                        self.env.cr.execute('RELEASE SAVEPOINT thinking_message')
-                        thinking_message = None  # Ensure it's None so we don't try to delete it later
-
-                except Exception as e:
-                    _logger.error(f"Critical error with thinking message savepoint: {e}")
-                    thinking_message = None
-
-                # Also try typing notification (might not work for bots, but doesn't hurt)
-                # Don't use savepoint here as it's just a bus notification
+                # Use typing indicator instead (better for Discuss)
                 try:
                     self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
                         'channel_id': self.id,
