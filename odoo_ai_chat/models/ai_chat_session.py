@@ -81,9 +81,14 @@ class AIChatSession(models.Model):
         self.write({'active': True})
 
     def _get_ai_bot_partner(self):
-        """Get or create AI bot partner"""
+        """Get or create AI bot partner
+
+        The AI bot appears as a contact in Discuss that you can:
+        - Start 1-on-1 chats with
+        - Add to group conversations
+        - @mention in any channel
+        """
         bot = self.env['res.partner'].sudo().search([
-            ('name', '=', 'AI Assistant Bot'),
             ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
@@ -100,17 +105,23 @@ class AIChatSession(models.Model):
 
         if not bot:
             bot = self.env['res.partner'].sudo().create({
-                'name': 'AI Assistant Bot',
+                'name': 'AI Assistant',  # Shorter, cleaner name
                 'email': 'ai.assistant@odoo.local',
                 'active': True,
                 'is_company': False,
                 'type': 'contact',
                 'image_1920': image_data,
-                'im_status': 'online',  # Always show as online/connected
+                'im_status': 'online',  # Always show as online
+                'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
             })
         else:
-            # Update existing bot with image if needed and ensure it's always online
-            update_vals = {'im_status': 'online'}
+            # Update existing bot to ensure it's visible and online
+            update_vals = {
+                'name': 'AI Assistant',  # Update name if it was the old "AI Assistant Bot"
+                'im_status': 'online',
+                'active': True,
+                'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
+            }
             if image_data and not bot.image_1920:
                 update_vals['image_1920'] = image_data
             bot.sudo().write(update_vals)

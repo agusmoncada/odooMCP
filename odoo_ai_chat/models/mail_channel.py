@@ -38,7 +38,6 @@ class MailChannel(models.Model):
 
         # Check if channel includes AI bot partner and mark as AI channel
         ai_bot = self.env['res.partner'].sudo().search([
-            ('name', '=', 'AI Assistant Bot'),
             ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
@@ -58,26 +57,36 @@ class MailChannel(models.Model):
         return channel
 
     def message_post(self, **kwargs):
-        """Override to intercept messages to AI channels"""
+        """Override to intercept messages to AI bot"""
         message = super().message_post(**kwargs)
 
-        _logger.info(f"message_post called on channel {self.id} ({self.name}), is_ai_channel={self.is_ai_channel}, message_author_id={message.author_id.id if message.author_id else None}")
-
-        # Check if this is an AI channel and message has an author
         # Skip processing if message has no author to prevent recursion
-        if not self.is_ai_channel or not message.author_id:
+        if not message.author_id:
             return message
 
+        # Get AI bot partner (search by email to handle name changes)
         ai_bot = self.env['res.partner'].sudo().search([
-            ('name', '=', 'AI Assistant Bot'),
             ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
-        _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={message.author_id.id}")
+        if not ai_bot:
+            return message
 
-        # Only process if message is from user, not from AI bot
-        # Also skip if AI bot not found to prevent errors
-        if ai_bot and message.author_id.id != ai_bot.id:
+        # Don't process messages FROM the AI bot (prevent recursion)
+        if message.author_id.id == ai_bot.id:
+            return message
+
+        # Check if AI should respond in this channel:
+        # 1. AI bot is a member of this channel (DM or group chat), OR
+        # 2. Message @mentions the AI bot, OR
+        # 3. Channel is explicitly marked as AI channel (backward compatibility)
+        ai_is_member = ai_bot.id in self.channel_partner_ids.ids
+        ai_is_mentioned = ai_bot.id in message.partner_ids.ids
+        should_respond = ai_is_member or ai_is_mentioned or self.is_ai_channel
+
+        _logger.info(f"message_post on channel {self.id} ({self.name}): ai_member={ai_is_member}, ai_mentioned={ai_is_mentioned}, is_ai_channel={self.is_ai_channel}, should_respond={should_respond}")
+
+        if should_respond:
             import time
             start_time = time.time()
             _logger.info(f"[TIMING] Message received at {start_time}, starting async thread")
@@ -193,7 +202,7 @@ class MailChannel(models.Model):
                 env = api.Environment(cr, uid, {})
                 channel = env['mail.channel'].browse(channel_id)
                 ai_bot = env['res.partner'].sudo().search([
-                    ('name', '=', 'AI Assistant Bot')
+                    ('email', '=', 'ai.assistant@odoo.local')
                 ], limit=1)
 
                 if ai_bot:
@@ -234,7 +243,6 @@ class MailChannel(models.Model):
         try:
             # Get AI bot
             ai_bot = self.env['res.partner'].sudo().search([
-                ('name', '=', 'AI Assistant Bot'),
                 ('email', '=', 'ai.assistant@odoo.local')
             ], limit=1)
 
@@ -422,7 +430,7 @@ class MailChannel(models.Model):
 
                     # Post AI response to channel
                     ai_bot = self.env['res.partner'].sudo().search([
-                        ('name', '=', 'AI Assistant Bot')
+                        ('email', '=', 'ai.assistant@odoo.local')
                     ], limit=1)
 
                     if ai_bot:
@@ -472,7 +480,7 @@ class MailChannel(models.Model):
             # Post error message to channel with AI bot as author to prevent recursion
             try:
                 ai_bot = self.env['res.partner'].sudo().search([
-                    ('name', '=', 'AI Assistant Bot')
+                    ('email', '=', 'ai.assistant@odoo.local')
                 ], limit=1)
 
                 if ai_bot:
@@ -827,7 +835,7 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         # Post final response to channel
         ai_bot = self.env['res.partner'].sudo().search([
-            ('name', '=', 'AI Assistant Bot')
+            ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
         if ai_bot:
