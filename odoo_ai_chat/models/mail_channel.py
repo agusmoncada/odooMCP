@@ -596,6 +596,9 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 # Skip tool messages in summary - they're too verbose
                 if msg.get('role') == 'tool':
                     continue
+                # Skip assistant messages with tool_calls - would be orphaned without tool results
+                if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                    continue
                 summarization_messages.append(msg)
 
             _logger.info(f"Summarizing {len(old_messages)} old messages (keeping last 10 intact)")
@@ -629,11 +632,29 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         except Exception as e:
             _logger.error(f"Error during conversation summarization: {e}")
 
-        # Fallback: If summarization fails, just truncate to last 15 messages
-        # Remove orphaned tool messages from the start
+        # Fallback: Smart truncation that preserves tool_use/tool_result pairs
         truncated = messages[-15:]
+
+        # Remove orphaned tool messages from start (tool without preceding assistant)
         while truncated and truncated[0].get('role') == 'tool':
+            _logger.info(f"Removing orphaned tool message from start")
             truncated.pop(0)
+
+        # Remove incomplete tool sequences from end (assistant with tool_calls but no tool results)
+        if truncated and truncated[-1].get('role') == 'assistant' and truncated[-1].get('tool_calls'):
+            _logger.info(f"Removing incomplete assistant+tool_calls from end")
+            truncated.pop()
+
+        # Remove consecutive duplicate assistant messages (API violation)
+        cleaned = []
+        for i, msg in enumerate(truncated):
+            # Skip if this is an assistant message and previous was also assistant
+            if msg.get('role') == 'assistant' and cleaned and cleaned[-1].get('role') == 'assistant':
+                _logger.warning(f"Removing duplicate consecutive assistant message at index {i}")
+                continue
+            cleaned.append(msg)
+
+        truncated = cleaned
 
         _logger.warning(f"Summarization failed, falling back to truncation: {len(messages)} -> {len(truncated)} messages")
         return truncated if truncated else messages[-1:]
