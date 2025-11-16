@@ -1,6 +1,7 @@
 """Mail Channel Extension for AI Integration"""
 
 from odoo import api, fields, models
+from odoo.tools import html_escape, plaintext2html
 import logging
 import json
 import requests
@@ -86,6 +87,17 @@ class MailChannel(models.Model):
 
         return message
 
+    def _format_ai_message_body(self, content):
+        """Format AI message content as HTML for proper display in Discuss"""
+        if not content:
+            return ''
+
+        # Use Odoo's plaintext2html to convert plain text to HTML
+        # This preserves line breaks and formats the text properly
+        html_content = plaintext2html(content)
+
+        return html_content
+
     def _process_ai_message(self, user_message):
         """Process user message and generate AI response"""
         try:
@@ -109,8 +121,8 @@ class MailChannel(models.Model):
 
             # Get AI configuration
             config_params = self.env['ir.config_parameter'].sudo()
-            openrouter_api_key = config_params.get_param('openrouter_api_key')
-            openrouter_model = config_params.get_param('openrouter_model', 'openai/gpt-3.5-turbo')
+            openrouter_api_key = config_params.get_param('odoo_ai_chat.openrouter_api_key')
+            openrouter_model = config_params.get_param('odoo_ai_chat.openrouter_model', 'openai/gpt-3.5-turbo')
 
             if not openrouter_api_key:
                 raise ValueError("OpenRouter API key not configured")
@@ -129,7 +141,7 @@ class MailChannel(models.Model):
 
             # Get MCP tools if enabled
             tools = None
-            mcp_enabled = config_params.get_param('mcp_tools_enabled', 'True') == 'True'
+            mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
             if mcp_enabled:
                 try:
                     mcp_server = self.env['mcp.server'].sudo()
@@ -168,8 +180,10 @@ class MailChannel(models.Model):
                     ], limit=1)
 
                     if ai_bot:
+                        # Format the message body for proper display in Discuss
+                        formatted_body = self._format_ai_message_body(content)
                         self.message_post(
-                            body=content,
+                            body=formatted_body,
                             author_id=ai_bot.id,
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
@@ -184,10 +198,13 @@ class MailChannel(models.Model):
                 ], limit=1)
 
                 if ai_bot:
+                    error_message = f"Sorry, I encountered an error: {str(e)}"
+                    formatted_error = self._format_ai_message_body(error_message)
                     self.with_context(mail_create_nosubscribe=True).message_post(
-                        body=f"Sorry, I encountered an error: {str(e)}",
+                        body=formatted_error,
                         author_id=ai_bot.id,
-                        message_type='notification'
+                        message_type='comment',
+                        subtype_xmlid='mail.mt_comment'
                     )
             except Exception as post_error:
                 # If even posting the error fails, just log it
@@ -196,7 +213,7 @@ class MailChannel(models.Model):
     def _build_context_aware_prompt(self):
         """Build context-aware system prompt"""
         config_params = self.env['ir.config_parameter'].sudo()
-        base_prompt = config_params.get_param('ai_system_prompt', 'You are a helpful AI assistant integrated with Odoo.')
+        base_prompt = config_params.get_param('odoo_ai_chat.system_prompt', 'You are a helpful AI assistant integrated with Odoo.')
 
         # Get user context
         user = self.env.user
@@ -300,8 +317,10 @@ And so on for other languages.
         ], limit=1)
 
         if ai_bot:
+            tool_message = "Processing your request with tools..."
+            formatted_tool_message = self._format_ai_message_body(tool_message)
             self.message_post(
-                body="Processing your request with tools...",
+                body=formatted_tool_message,
                 author_id=ai_bot.id,
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
