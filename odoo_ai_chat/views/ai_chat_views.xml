@@ -152,6 +152,9 @@
         <field name="target">current</field>
     </record>
 
+    <!-- Delete old server action if it exists -->
+    <delete model="ir.actions.server" id="action_open_ai_discuss_channel" search="[]"/>
+
     <!-- URL Action to Open AI Discuss Channel -->
     <record id="action_open_ai_discuss_channel" model="ir.actions.act_url">
         <field name="name">AI Assistant (Discuss)</field>
