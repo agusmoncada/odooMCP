@@ -139,9 +139,21 @@ class MailChannel(models.Model):
                 # Process the AI message
                 channel._process_ai_message(message_body)
 
-                # Commit the transaction
-                cr.commit()
-                _logger.info(f"[ASYNC] Processing complete and committed")
+                # Commit the transaction with retry on serialization failure
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        cr.commit()
+                        _logger.info(f"[ASYNC] Processing complete and committed")
+                        break
+                    except Exception as commit_error:
+                        if 'could not serialize access' in str(commit_error) and attempt < max_retries - 1:
+                            _logger.warning(f"[ASYNC] Serialization error on attempt {attempt + 1}, retrying...")
+                            import time
+                            time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                            cr.rollback()
+                        else:
+                            raise
 
         except Exception as e:
             _logger.exception(f"[ASYNC] Error in async AI message processing: {e}")
