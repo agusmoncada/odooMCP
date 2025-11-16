@@ -678,3 +678,18 @@ Only use a different language if the user explicitly requests it.
         except Exception as e:
             _logger.exception("Error processing invoice")
             return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/open_discuss_channel', type='http', auth='user')
+    def open_discuss_channel(self, **kwargs):
+        """Open or create AI Assistant channel in Discuss"""
+        try:
+            # Get or create AI channel
+            session_model = request.env['ai.chat.session']
+            channel = session_model.get_or_create_ai_channel_for_user()
+
+            # Redirect to Discuss with a message
+            return request.redirect('/web#action=mail.action_discuss&active_id=%s' % channel.id)
+
+        except Exception as e:
+            _logger.exception("Error opening AI discuss channel")
+            return request.redirect('/web')

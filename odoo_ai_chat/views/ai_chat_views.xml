@@ -152,25 +152,11 @@
         <field name="target">current</field>
     </record>
 
-    <!-- Server Action to Open AI Discuss Channel -->
-    <record id="action_open_ai_discuss_channel" model="ir.actions.server">
+    <!-- URL Action to Open AI Discuss Channel -->
+    <record id="action_open_ai_discuss_channel" model="ir.actions.act_url">
         <field name="name">AI Assistant (Discuss)</field>
-        <field name="model_id" ref="model_ai_chat_session"/>
-        <field name="state">code</field>
-        <field name="code">
-# Get or create AI channel for current user
-channel = model.get_or_create_ai_channel_for_user()
-
-# Open the channel in Discuss
-action = {
-    'type': 'ir.actions.act_window',
-    'res_model': 'mail.channel',
-    'res_id': channel.id,
-    'view_mode': 'form',
-    'target': 'current',
-    'views': [(False, 'form')],
-}
-        </field>
+        <field name="url">/ai_chat/open_discuss_channel</field>
+        <field name="target">self</field>
     </record>
 
     <!-- Menu Items -->

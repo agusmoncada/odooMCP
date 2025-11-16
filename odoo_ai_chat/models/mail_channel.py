@@ -62,8 +62,11 @@ class MailChannel(models.Model):
 
             # Only process if message is from user, not from AI bot
             if ai_bot and kwargs.get('author_id') != ai_bot.id:
-                # Process AI message asynchronously
-                self.with_delay()._process_ai_message(message)
+                # Process AI message
+                try:
+                    self._process_ai_message(message)
+                except Exception as e:
+                    _logger.error(f"Error processing AI message: {e}", exc_info=True)
 
         return message
 
