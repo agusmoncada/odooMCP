@@ -578,38 +578,72 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             # Execute all tool calls in this iteration
             for tc in current_tool_calls:
+                # Use savepoint to isolate each tool execution
+                # If one tool fails, we can rollback just that operation
+                savepoint_name = f"tool_exec_{tc['id'][:8]}"
+
                 try:
                     tool_name = tc['function']['name']
                     tool_args = json.loads(tc['function']['arguments'])
 
                     _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
-                    result = mcp_server.call_tool(tool_name, tool_args)
 
-                    # Extract graph data if this was a generate_graph call
-                    if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
-                        graph_data = {'image_base64': result['image_base64']}
-                        _logger.info(f"Graph generated successfully, image size: {len(result['image_base64'])} chars")
+                    # Create savepoint before tool execution
+                    self.env.cr.execute(f'SAVEPOINT {savepoint_name}')
 
-                    # Create tool response message
+                    try:
+                        result = mcp_server.call_tool(tool_name, tool_args)
+
+                        # Extract graph data if this was a generate_graph call
+                        if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
+                            graph_data = {'image_base64': result['image_base64']}
+                            _logger.info(f"Graph generated successfully, image size: {len(result['image_base64'])} chars")
+
+                        # Tool succeeded - release savepoint
+                        self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+
+                    except Exception as tool_error:
+                        # Tool failed - rollback to savepoint
+                        _logger.warning(f"Tool {tool_name} failed, rolling back to savepoint: {tool_error}")
+                        self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                        self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+
+                        # Create error result
+                        result = {'success': False, 'error': str(tool_error)}
+
+                    # Create tool response message (outside savepoint)
                     self.env['ai.chat.message'].create({
                         'session_id': session.id,
                         'role': 'tool',
                         'content': json.dumps(result),
                         'tool_call_id': tc['id'],
-                        'metadata': json.dumps({'tool_name': tool_name}),
+                        'metadata': json.dumps({'tool_name': tool_name, 'error': not result.get('success', False)}),
                     })
 
                 except Exception as e:
-                    _logger.error(f"Error executing tool {tool_name}: {e}")
+                    _logger.error(f"Critical error in tool execution loop for {tc.get('function', {}).get('name', 'unknown')}: {e}")
+                    # Try to rollback savepoint if it exists
+                    try:
+                        self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                        self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+                    except Exception:
+                        pass
+
                     # Create error response
                     error_result = {'success': False, 'error': str(e)}
-                    self.env['ai.chat.message'].create({
-                        'session_id': session.id,
-                        'role': 'tool',
-                        'content': json.dumps(error_result),
-                        'tool_call_id': tc['id'],
-                        'metadata': json.dumps({'tool_name': tool_name, 'error': True}),
-                    })
+                    try:
+                        self.env['ai.chat.message'].create({
+                            'session_id': session.id,
+                            'role': 'tool',
+                            'content': json.dumps(error_result),
+                            'tool_call_id': tc['id'],
+                            'metadata': json.dumps({'tool_name': tc.get('function', {}).get('name', 'unknown'), 'error': True}),
+                        })
+                    except Exception as msg_error:
+                        _logger.error(f"Could not even create error message: {msg_error}")
+                        # If we can't create the error message, the transaction is really broken
+                        # This will be caught by the outer exception handler
+                        raise
 
             # After executing tools, call AI again with results
             # IMPORTANT: Keep tools enabled so AI can make additional calls if needed
