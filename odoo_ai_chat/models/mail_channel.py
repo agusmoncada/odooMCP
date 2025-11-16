@@ -59,19 +59,19 @@ class MailChannel(models.Model):
         """Override to intercept messages to AI channels"""
         message = super().message_post(**kwargs)
 
-        _logger.info(f"message_post called on channel {self.id} ({self.name}), is_ai_channel={self.is_ai_channel}, author_id={kwargs.get('author_id')}")
+        _logger.info(f"message_post called on channel {self.id} ({self.name}), is_ai_channel={self.is_ai_channel}, message_author_id={message.author_id.id if message.author_id else None}")
 
-        # Check if this is an AI channel and message is from user (not AI bot)
-        if self.is_ai_channel and kwargs.get('author_id'):
+        # Check if this is an AI channel and message has an author
+        if self.is_ai_channel and message.author_id:
             ai_bot = self.env['res.partner'].sudo().search([
                 ('name', '=', 'AI Assistant Bot'),
                 ('email', '=', 'ai.assistant@odoo.local')
             ], limit=1)
 
-            _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={kwargs.get('author_id')}")
+            _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={message.author_id.id}")
 
             # Only process if message is from user, not from AI bot
-            if ai_bot and kwargs.get('author_id') != ai_bot.id:
+            if ai_bot and message.author_id.id != ai_bot.id:
                 _logger.info(f"Processing AI message from user")
                 # Process AI message
                 try:
