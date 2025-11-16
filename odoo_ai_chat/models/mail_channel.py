@@ -240,8 +240,21 @@ class MailChannel(models.Model):
             mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
             if mcp_enabled:
                 try:
-                    mcp_server = self.env['mcp.server'].sudo()
-                    tools = mcp_server.get_tools()
+                    mcp_server = self.env['mcp.server.registry'].sudo()
+                    mcp_tools = mcp_server.list_tools()
+
+                    # Convert MCP tools to OpenRouter/OpenAI format
+                    tools = []
+                    for tool in mcp_tools:
+                        tools.append({
+                            'type': 'function',
+                            'function': {
+                                'name': tool['name'],
+                                'description': tool['description'],
+                                'parameters': tool.get('inputSchema', {})
+                            }
+                        })
+                    _logger.info(f"Loaded {len(tools)} MCP tools")
                 except Exception as e:
                     _logger.warning(f"Could not load MCP tools: {e}")
 
@@ -407,7 +420,7 @@ Use tools when needed to provide accurate, data-driven responses."""
         })
 
         # Execute tools and create tool response messages
-        mcp_server = self.env['mcp.server'].sudo()
+        mcp_server = self.env['mcp.server.registry'].sudo()
         graph_data = None  # Track graph data if generated
 
         for tc in tool_calls:
