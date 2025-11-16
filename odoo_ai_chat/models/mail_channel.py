@@ -123,72 +123,93 @@ class MailChannel(models.Model):
     def _process_ai_message_async(self, dbname, uid, channel_id, message_body):
         """Process AI message asynchronously in a separate thread with new cursor"""
         _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}")
-        try:
-            # Create a new registry and cursor for this thread
-            import odoo
-            registry = odoo.registry(dbname)
-            _logger.info(f"[ASYNC] Registry obtained for {dbname}")
 
-            with registry.cursor() as cr:
-                _logger.info(f"[ASYNC] New cursor created")
-                env = api.Environment(cr, uid, {})
-                channel = env['mail.channel'].browse(channel_id)
-
-                _logger.info(f"[ASYNC] About to process message: {message_body[:50] if message_body else 'NO BODY'}")
-
-                # Process the AI message
-                channel._process_ai_message(message_body)
-
-                # Commit the transaction with retry on serialization failure
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        cr.commit()
-                        _logger.info(f"[ASYNC] Processing complete and committed")
-                        break
-                    except Exception as commit_error:
-                        if 'could not serialize access' in str(commit_error) and attempt < max_retries - 1:
-                            _logger.warning(f"[ASYNC] Serialization error on attempt {attempt + 1}, retrying...")
-                            import time
-                            time.sleep(0.1 * (attempt + 1))  # Exponential backoff
-                            cr.rollback()
-                        else:
-                            raise
-
-        except Exception as e:
-            _logger.exception(f"[ASYNC] Error in async AI message processing: {e}")
-            # Try to post error message with a new cursor
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
+                # Create a new registry and cursor for this thread
                 import odoo
                 registry = odoo.registry(dbname)
+                _logger.info(f"[ASYNC] Registry obtained for {dbname}, attempt {attempt + 1}/{max_retries}")
+
                 with registry.cursor() as cr:
+                    _logger.info(f"[ASYNC] New cursor created")
                     env = api.Environment(cr, uid, {})
                     channel = env['mail.channel'].browse(channel_id)
-                    ai_bot = env['res.partner'].sudo().search([
-                        ('name', '=', 'AI Assistant Bot')
-                    ], limit=1)
 
-                    if ai_bot:
-                        error_msg = f"Sorry, I encountered an error processing your message: {str(e)}"
-                        posted_message = channel.message_post(
-                            body=channel._format_ai_message_body(error_msg),
-                            author_id=ai_bot.id,
-                            message_type='comment',
-                            subtype_xmlid='mail.mt_comment'
-                        )
+                    _logger.info(f"[ASYNC] About to process message: {message_body[:50] if message_body else 'NO BODY'}")
 
-                        # Manually trigger bus notification to update UI
-                        try:
-                            env['bus.bus']._sendone(channel, 'mail.channel/new_message', {
-                                'id': channel.id,
-                                'message': posted_message.message_format()[0]
-                            })
-                        except Exception:
-                            pass  # Bus notification is optional
+                    # Process the AI message
+                    channel._process_ai_message(message_body)
 
-                        cr.commit()
-            except Exception as post_error:
-                _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
+                    # Commit the transaction
+                    cr.commit()
+                    _logger.info(f"[ASYNC] Processing complete and committed on attempt {attempt + 1}")
+                    break  # Success! Exit the retry loop
+
+            except Exception as e:
+                error_msg = str(e)
+                if 'could not serialize access' in error_msg or 'current transaction is aborted' in error_msg:
+                    if attempt < max_retries - 1:
+                        _logger.warning(f"[ASYNC] Serialization error on attempt {attempt + 1}/{max_retries}, retrying...")
+                        import time
+                        time.sleep(0.1 * (2 ** attempt))  # Exponential backoff: 0.1s, 0.2s, 0.4s
+                        continue  # Retry
+                    else:
+                        _logger.error(f"[ASYNC] Serialization error after {max_retries} attempts, giving up")
+                        # Post error message in a new transaction
+                        self._post_async_error(dbname, uid, channel_id, "I'm experiencing database conflicts. Please try again.")
+                        return
+                else:
+                    # Non-serialization error, don't retry
+                    _logger.exception(f"[ASYNC] Error in async AI message processing: {e}")
+                    self._post_async_error(dbname, uid, channel_id, str(e))
+                    return
+
+    def _post_async_error(self, dbname, uid, channel_id, error_message):
+        """Post error message in a new transaction"""
+        try:
+            import odoo
+            registry = odoo.registry(dbname)
+            with registry.cursor() as cr:
+                env = api.Environment(cr, uid, {})
+                channel = env['mail.channel'].browse(channel_id)
+                ai_bot = env['res.partner'].sudo().search([
+                    ('name', '=', 'AI Assistant Bot')
+                ], limit=1)
+
+                if ai_bot:
+                    # Stop typing indicator
+                    try:
+                        env['bus.bus']._sendone(channel, 'mail.channel.partner/typing_status', {
+                            'channel_id': channel.id,
+                            'partner_id': ai_bot.id,
+                            'is_typing': False,
+                        })
+                    except Exception:
+                        pass
+
+                    error_msg = f"Sorry, I encountered an error: {error_message}"
+                    posted_message = channel.message_post(
+                        body=channel._format_ai_message_body(error_msg),
+                        author_id=ai_bot.id,
+                        message_type='comment',
+                        subtype_xmlid='mail.mt_comment'
+                    )
+
+                    # Manually trigger bus notification to update UI
+                    try:
+                        env['bus.bus']._sendone(channel, 'mail.channel/new_message', {
+                            'id': channel.id,
+                            'message': posted_message.message_format()[0]
+                        })
+                    except Exception:
+                        pass  # Bus notification is optional
+
+                    cr.commit()
+                    _logger.info(f"[ASYNC] Error message posted successfully")
+        except Exception as post_error:
+            _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
 
     def _process_ai_message(self, user_message_body):
         """Process user message and generate AI response
