@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import json
 
 from odoo import models, api
 
@@ -92,8 +93,8 @@ class MailThread(models.AbstractModel):
                         body=thinking_body,
                         author_id=ai_bot.id,
                         message_type='comment',
-                        subtype_xmlid='mail.mt_comment',
-                        parent_id=original_message_id  # Reply to the @mention
+                        subtype_xmlid='mail.mt_comment'
+                        # Don't use parent_id here - original message may not be committed yet
                     )
                     env.cr.commit()
                     _logger.info(f"Posted thinking message to {model_name}({record_id})")
@@ -165,7 +166,6 @@ class MailThread(models.AbstractModel):
                     # Execute tool calls
                     mcp_server = env['mcp.server.registry'].sudo()
                     max_iterations = 10
-                    iteration = 0
 
                     while tool_calls and iteration < max_iterations:
                         iteration += 1
@@ -183,7 +183,6 @@ class MailThread(models.AbstractModel):
                             tool_name = tc['function']['name']
                             tool_args = tc['function'].get('arguments', {})
                             if isinstance(tool_args, str):
-                                import json
                                 tool_args = json.loads(tool_args)
 
                             tool_call_id = tc['id']
@@ -196,7 +195,6 @@ class MailThread(models.AbstractModel):
                                 result = {'success': False, 'error': str(e)}
 
                             # Add tool result to messages
-                            import json
                             messages.append({
                                 'role': 'tool',
                                 'tool_call_id': tool_call_id,
