@@ -78,7 +78,8 @@ class MailChannel(models.Model):
         # Only process if message is from user, not from AI bot
         # Also skip if AI bot not found to prevent errors
         if ai_bot and message.author_id.id != ai_bot.id:
-            _logger.info(f"Processing AI message from user")
+            _logger.info(f"Processing AI message from user, starting async thread")
+            _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_id={message.id}")
             # Process AI message asynchronously to avoid blocking the UI
             # Use threading to process in background with a new cursor
             thread = threading.Thread(
@@ -87,6 +88,7 @@ class MailChannel(models.Model):
             )
             thread.daemon = True
             thread.start()
+            _logger.info(f"Async thread started successfully")
 
         return message
 
@@ -103,24 +105,52 @@ class MailChannel(models.Model):
 
     def _process_ai_message_async(self, dbname, uid, channel_id, message_id):
         """Process AI message asynchronously in a separate thread with new cursor"""
+        _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}, message {message_id}")
         try:
             # Create a new registry and cursor for this thread
             import odoo
             registry = odoo.registry(dbname)
+            _logger.info(f"[ASYNC] Registry obtained for {dbname}")
 
             with registry.cursor() as cr:
+                _logger.info(f"[ASYNC] New cursor created")
                 env = api.Environment(cr, uid, {})
                 channel = env['mail.channel'].browse(channel_id)
                 message = env['mail.message'].browse(message_id)
+
+                _logger.info(f"[ASYNC] About to process message: {message.body[:50] if message.body else 'NO BODY'}")
 
                 # Process the AI message
                 channel._process_ai_message(message)
 
                 # Commit the transaction
                 cr.commit()
+                _logger.info(f"[ASYNC] Processing complete and committed")
 
         except Exception as e:
-            _logger.exception(f"Error in async AI message processing: {e}")
+            _logger.exception(f"[ASYNC] Error in async AI message processing: {e}")
+            # Try to post error message with a new cursor
+            try:
+                import odoo
+                registry = odoo.registry(dbname)
+                with registry.cursor() as cr:
+                    env = api.Environment(cr, uid, {})
+                    channel = env['mail.channel'].browse(channel_id)
+                    ai_bot = env['res.partner'].sudo().search([
+                        ('name', '=', 'AI Assistant Bot')
+                    ], limit=1)
+
+                    if ai_bot:
+                        error_msg = f"Sorry, I encountered an error processing your message: {str(e)}"
+                        channel.message_post(
+                            body=channel._format_ai_message_body(error_msg),
+                            author_id=ai_bot.id,
+                            message_type='comment',
+                            subtype_xmlid='mail.mt_comment'
+                        )
+                        cr.commit()
+            except Exception as post_error:
+                _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
 
     def _process_ai_message(self, user_message):
         """Process user message and generate AI response"""
