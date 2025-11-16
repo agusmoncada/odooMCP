@@ -327,6 +327,16 @@ class MailChannel(models.Model):
                 _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
                 messages = messages[-15:]
 
+                # After truncation, ensure we don't start with orphaned tool messages
+                # (tool results without their corresponding assistant tool_calls)
+                while messages and messages[0].get('role') == 'tool':
+                    removed_msg = messages.pop(0)
+                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
+
+                if not messages:
+                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
+                    messages = [session.get_messages_for_api()[-1]]
+
             # Add system prompt
             messages.insert(0, {
                 'role': 'system',
@@ -734,6 +744,16 @@ Remember: Execute ALL required tool calls before providing a final text response
             if len(messages) > 15:
                 _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
                 messages = messages[-15:]
+
+                # After truncation, ensure we don't start with orphaned tool messages
+                # (tool results without their corresponding assistant tool_calls)
+                while messages and messages[0].get('role') == 'tool':
+                    removed_msg = messages.pop(0)
+                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
+
+                if not messages:
+                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
+                    messages = [session.get_messages_for_api()[-1]]
 
             messages.insert(0, {
                 'role': 'system',
