@@ -30,28 +30,36 @@ class MailChannel(models.Model):
         """Mark channels with AI bot as AI channels"""
         channel = super().create(vals)
 
-        # Check if channel includes AI bot partner
+        # If channel is already marked as AI channel and has a session, skip
+        if channel.is_ai_channel and channel.ai_session_id:
+            return channel
+
+        # Check if channel includes AI bot partner and mark as AI channel
         ai_bot = self.env['res.partner'].sudo().search([
             ('name', '=', 'AI Assistant Bot'),
             ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
         if ai_bot and ai_bot.id in channel.channel_partner_ids.ids:
-            channel.is_ai_channel = True
+            if not channel.is_ai_channel:
+                channel.is_ai_channel = True
 
-            # Create linked AI session
-            session = self.env['ai.chat.session'].create({
-                'name': channel.name,
-                'user_id': self.env.user.id,
-                'channel_id': channel.id,
-            })
-            channel.ai_session_id = session.id
+            # Create linked AI session if not already linked
+            if not channel.ai_session_id:
+                session = self.env['ai.chat.session'].create({
+                    'name': channel.name or 'AI Assistant Chat',
+                    'user_id': self.env.user.id,
+                    'channel_id': channel.id,
+                })
+                channel.ai_session_id = session.id
 
         return channel
 
     def message_post(self, **kwargs):
         """Override to intercept messages to AI channels"""
         message = super().message_post(**kwargs)
+
+        _logger.info(f"message_post called on channel {self.id} ({self.name}), is_ai_channel={self.is_ai_channel}, author_id={kwargs.get('author_id')}")
 
         # Check if this is an AI channel and message is from user (not AI bot)
         if self.is_ai_channel and kwargs.get('author_id'):
@@ -60,8 +68,11 @@ class MailChannel(models.Model):
                 ('email', '=', 'ai.assistant@odoo.local')
             ], limit=1)
 
+            _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={kwargs.get('author_id')}")
+
             # Only process if message is from user, not from AI bot
             if ai_bot and kwargs.get('author_id') != ai_bot.id:
+                _logger.info(f"Processing AI message from user")
                 # Process AI message
                 try:
                     self._process_ai_message(message)

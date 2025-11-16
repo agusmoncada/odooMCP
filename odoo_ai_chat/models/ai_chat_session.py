@@ -1,6 +1,8 @@
 """AI Chat Session Model"""
 
 from odoo import api, fields, models
+import base64
+import os
 
 
 class AIChatSession(models.Model):
@@ -86,12 +88,24 @@ class AIChatSession(models.Model):
         ], limit=1)
 
         if not bot:
+            # Read AI icon from module's static folder
+            icon_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                'static', 'description', 'icon.png'
+            )
+
+            image_data = False
+            if os.path.exists(icon_path):
+                with open(icon_path, 'rb') as icon_file:
+                    image_data = base64.b64encode(icon_file.read())
+
             bot = self.env['res.partner'].sudo().create({
                 'name': 'AI Assistant Bot',
                 'email': 'ai.assistant@odoo.local',
                 'active': True,
                 'is_company': False,
                 'type': 'contact',
+                'image_1920': image_data,
             })
 
         return bot
@@ -151,7 +165,7 @@ class AIChatSession(models.Model):
         # Look for existing AI channel - a chat with both the user and AI bot
         channel = self.env['mail.channel'].search([
             ('channel_type', '=', 'chat'),
-            ('channel_partner_ids', 'in', [ai_bot.id]),
+            ('is_ai_channel', '=', True),
             ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
         ], limit=1)
 
@@ -161,13 +175,22 @@ class AIChatSession(models.Model):
         # Create new AI channel
         channel = self.env['mail.channel'].create({
             'name': f'AI Assistant',
-            'description': 'Personal AI Assistant powered by OpenRouter',
+            'description': 'Personal AI Assistant powered by IT Patagon',
             'channel_type': 'chat',
+            'is_ai_channel': True,  # Explicitly set this flag
             'channel_partner_ids': [
                 (4, self.env.user.partner_id.id),
                 (4, ai_bot.id)
             ],
         })
+
+        # Create linked AI session
+        session = self.create({
+            'name': 'AI Assistant Chat',
+            'user_id': self.env.user.id,
+            'channel_id': channel.id,
+        })
+        channel.ai_session_id = session.id
 
         return channel
 
