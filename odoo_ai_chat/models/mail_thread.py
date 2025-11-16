@@ -93,8 +93,8 @@ class MailThread(models.AbstractModel):
                         body=thinking_body,
                         author_id=ai_bot.id,
                         message_type='comment',
-                        subtype_xmlid='mail.mt_comment',
-                        parent_id=original_message_id  # Reply to the @mention
+                        subtype_xmlid='mail.mt_comment'
+                        # Don't use parent_id here - original message may not be committed yet
                     )
                     env.cr.commit()
                     _logger.info(f"Posted thinking message to {model_name}({record_id})")
