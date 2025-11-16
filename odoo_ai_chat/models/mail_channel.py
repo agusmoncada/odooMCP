@@ -275,27 +275,37 @@ class MailChannel(models.Model):
     def _build_context_aware_prompt(self):
         """Build context-aware system prompt"""
         config_params = self.env['ir.config_parameter'].sudo()
-        base_prompt = config_params.get_param('odoo_ai_chat.system_prompt', 'You are a helpful AI assistant integrated with Odoo.')
 
         # Get user context
         user = self.env.user
-        context_parts = [base_prompt]
 
-        # Add user language and timezone
-        context_parts.append(f"""
+        # Create a clean, concise system prompt for Discuss interface
+        # Don't use the verbose config system prompt as it confuses function calling
+        prompt = f"""You are an expert Odoo ERP assistant integrated into the Discuss messaging interface.
+You help users with data queries, record creation/updates, and workflow tasks.
+
 USER CONTEXT:
 - Name: {user.name}
 - Language: {user.lang}
 - Timezone: {user.tz}
 - Company: {user.company_id.name if user.company_id else 'N/A'}
 
-IMPORTANT: Please respond in the user's language ({user.lang}) unless explicitly asked otherwise.
-If the user's language is Spanish (es_ES, es_MX, etc.), respond in Spanish.
-If the user's language is French (fr_FR, etc.), respond in French.
-And so on for other languages.
-""")
+INSTRUCTIONS:
+- Respond in the user's language ({user.lang})
+- Use available tools to access and manipulate Odoo data
+- Be concise and professional
+- When using tools, wait for results before responding to the user
+- Provide clear, actionable answers based on real data
 
-        return "\n\n".join(context_parts)
+Available tools allow you to:
+- search_records: Query Odoo data (sales, customers, products, etc.)
+- create_record: Create new records
+- write_record: Update existing records
+- generate_graph: Create visualizations when explicitly requested
+
+Use tools when needed to provide accurate, data-driven responses."""
+
+        return prompt
 
     def _call_openrouter_api(self, api_key, model, messages, tools=None):
         """Call OpenRouter API"""
