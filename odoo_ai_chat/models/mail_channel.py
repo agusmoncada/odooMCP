@@ -158,12 +158,22 @@ class MailChannel(models.Model):
 
                     if ai_bot:
                         error_msg = f"Sorry, I encountered an error processing your message: {str(e)}"
-                        channel.message_post(
+                        posted_message = channel.message_post(
                             body=channel._format_ai_message_body(error_msg),
                             author_id=ai_bot.id,
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
+
+                        # Manually trigger bus notification to update UI
+                        try:
+                            env['bus.bus']._sendone(channel, 'mail.channel/new_message', {
+                                'id': channel.id,
+                                'message': posted_message.message_format()[0]
+                            })
+                        except Exception:
+                            pass  # Bus notification is optional
+
                         cr.commit()
             except Exception as post_error:
                 _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
@@ -264,12 +274,18 @@ class MailChannel(models.Model):
                     if ai_bot:
                         # Format the message body for proper display in Discuss
                         formatted_body = self._format_ai_message_body(content)
-                        self.message_post(
+                        posted_message = self.message_post(
                             body=formatted_body,
                             author_id=ai_bot.id,
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
+
+                        # Manually trigger bus notification to update UI
+                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                            'id': self.id,
+                            'message': posted_message.message_format()[0]
+                        })
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -282,12 +298,21 @@ class MailChannel(models.Model):
                 if ai_bot:
                     error_message = f"Sorry, I encountered an error: {str(e)}"
                     formatted_error = self._format_ai_message_body(error_message)
-                    self.with_context(mail_create_nosubscribe=True).message_post(
+                    posted_message = self.with_context(mail_create_nosubscribe=True).message_post(
                         body=formatted_error,
                         author_id=ai_bot.id,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment'
                     )
+
+                    # Manually trigger bus notification to update UI
+                    try:
+                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                            'id': self.id,
+                            'message': posted_message.message_format()[0]
+                        })
+                    except Exception:
+                        pass  # Bus notification is optional
             except Exception as post_error:
                 # If even posting the error fails, just log it
                 _logger.error(f"Failed to post error message to channel: {post_error}")
@@ -444,12 +469,18 @@ Use tools when needed to provide accurate, data-driven responses."""
                 if ai_bot and final_content:
                     # Format body with graph if available
                     formatted_body = self._format_ai_message_body(final_content, graph_data=graph_data)
-                    self.message_post(
+                    posted_message = self.message_post(
                         body=formatted_body,
                         author_id=ai_bot.id,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment'
                     )
+
+                    # Manually trigger bus notification to update UI
+                    self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                        'id': self.id,
+                        'message': posted_message.message_format()[0]
+                    })
 
         except Exception as e:
             _logger.error(f"Error getting final AI response after tool execution: {e}")
@@ -461,9 +492,18 @@ Use tools when needed to provide accurate, data-driven responses."""
             if ai_bot:
                 error_message = f"I executed the tools but encountered an error getting the final response: {str(e)}"
                 formatted_error = self._format_ai_message_body(error_message)
-                self.message_post(
+                posted_message = self.message_post(
                     body=formatted_error,
                     author_id=ai_bot.id,
                     message_type='comment',
                     subtype_xmlid='mail.mt_comment'
                 )
+
+                # Manually trigger bus notification to update UI
+                try:
+                    self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                        'id': self.id,
+                        'message': posted_message.message_format()[0]
+                    })
+                except Exception:
+                    pass  # Bus notification is optional
