@@ -489,8 +489,12 @@ class MCPServer:
             labels = ['Total']
             values = [value]
 
+        # Generate actual image for embedding in Discuss
+        image_base64 = self._render_graph_image(graph_type, labels, values, title or y_field)
+
         return {
             'success': True,
+            'image_base64': image_base64,
             'graph_data': {
                 'type': graph_type,
                 'labels': labels,
@@ -500,6 +504,52 @@ class MCPServer:
                 }]
             }
         }
+
+    def _render_graph_image(self, graph_type: str, labels: List, values: List, title: str) -> str:
+        """Render graph as base64 encoded image"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import matplotlib.pyplot as plt
+            import base64
+            from io import BytesIO
+
+            # Create figure
+            fig, ax = plt.subplots(figsize=(10, 6))
+
+            if graph_type == 'bar':
+                ax.bar(range(len(labels)), values, color='#875A7B')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+            elif graph_type == 'line':
+                ax.plot(range(len(labels)), values, marker='o', color='#875A7B', linewidth=2)
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+            elif graph_type == 'pie':
+                ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
+            else:  # default to bar
+                ax.bar(range(len(labels)), values, color='#875A7B')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            plt.tight_layout()
+
+            # Convert to base64
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+            plt.close(fig)
+
+            return image_base64
+
+        except ImportError:
+            _logger.warning("matplotlib not available, graphs will not be rendered")
+            return None
+        except Exception as e:
+            _logger.error(f"Error rendering graph: {e}", exc_info=True)
+            return None
 
     def _format_label(self, label) -> str:
         """Format a label for display"""
