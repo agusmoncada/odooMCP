@@ -87,18 +87,18 @@ class AIChatSession(models.Model):
             ('email', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
+        # Read AI icon from module's static folder
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'static', 'description', 'icon.png'
+        )
+
+        image_data = False
+        if os.path.exists(icon_path):
+            with open(icon_path, 'rb') as icon_file:
+                image_data = base64.b64encode(icon_file.read())
+
         if not bot:
-            # Read AI icon from module's static folder
-            icon_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                'static', 'description', 'icon.png'
-            )
-
-            image_data = False
-            if os.path.exists(icon_path):
-                with open(icon_path, 'rb') as icon_file:
-                    image_data = base64.b64encode(icon_file.read())
-
             bot = self.env['res.partner'].sudo().create({
                 'name': 'AI Assistant Bot',
                 'email': 'ai.assistant@odoo.local',
@@ -107,6 +107,9 @@ class AIChatSession(models.Model):
                 'type': 'contact',
                 'image_1920': image_data,
             })
+        elif image_data and not bot.image_1920:
+            # Update existing bot with image if it doesn't have one
+            bot.sudo().write({'image_1920': image_data})
 
         return bot
 

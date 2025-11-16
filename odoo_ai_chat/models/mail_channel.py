@@ -5,6 +5,7 @@ from odoo.tools import html_escape, plaintext2html
 import logging
 import json
 import requests
+import threading
 
 _logger = logging.getLogger(__name__)
 
@@ -78,12 +79,14 @@ class MailChannel(models.Model):
         # Also skip if AI bot not found to prevent errors
         if ai_bot and message.author_id.id != ai_bot.id:
             _logger.info(f"Processing AI message from user")
-            # Process AI message
-            try:
-                self._process_ai_message(message)
-            except Exception as e:
-                # Log the error without exc_info if it might cause recursion issues
-                _logger.error(f"Error processing AI message: {str(e)}")
+            # Process AI message asynchronously to avoid blocking the UI
+            # Use threading to process in background with a new cursor
+            thread = threading.Thread(
+                target=self._process_ai_message_async,
+                args=(self.env.cr.dbname, self.env.uid, self.id, message.id)
+            )
+            thread.daemon = True
+            thread.start()
 
         return message
 
@@ -97,6 +100,27 @@ class MailChannel(models.Model):
         html_content = plaintext2html(content)
 
         return html_content
+
+    def _process_ai_message_async(self, dbname, uid, channel_id, message_id):
+        """Process AI message asynchronously in a separate thread with new cursor"""
+        try:
+            # Create a new registry and cursor for this thread
+            import odoo
+            registry = odoo.registry(dbname)
+
+            with registry.cursor() as cr:
+                env = api.Environment(cr, uid, {})
+                channel = env['mail.channel'].browse(channel_id)
+                message = env['mail.message'].browse(message_id)
+
+                # Process the AI message
+                channel._process_ai_message(message)
+
+                # Commit the transaction
+                cr.commit()
+
+        except Exception as e:
+            _logger.exception(f"Error in async AI message processing: {e}")
 
     def _process_ai_message(self, user_message):
         """Process user message and generate AI response"""
@@ -164,8 +188,16 @@ class MailChannel(models.Model):
                 # Handle tool calls if any
                 tool_calls = assistant_message.get('tool_calls')
                 if tool_calls:
-                    # Process tool calls...
-                    self._process_tool_calls(session, tool_calls, content)
+                    # Process tool calls and get final response
+                    self._process_tool_calls(
+                        session,
+                        tool_calls,
+                        content,
+                        openrouter_api_key,
+                        openrouter_model,
+                        system_prompt,
+                        tools
+                    )
                 else:
                     # Create assistant message
                     self.env['ai.chat.message'].create({
@@ -257,10 +289,8 @@ And so on for other languages.
 
         return response.json()
 
-    def _process_tool_calls(self, session, tool_calls, assistant_content):
-        """Process tool calls from AI"""
-        # This is a simplified version - the full implementation would
-        # execute tools via MCP server and handle responses
+    def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
+        """Process tool calls from AI and get final response"""
         _logger.info(f"Processing {len(tool_calls)} tool calls")
 
         # Create assistant message with tool calls
@@ -287,6 +317,7 @@ And so on for other languages.
                 tool_name = tc['function']['name']
                 tool_args = json.loads(tc['function']['arguments'])
 
+                _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
                 result = mcp_server.call_tool(tool_name, tool_args)
 
                 # Create tool response message
@@ -301,27 +332,71 @@ And so on for other languages.
             except Exception as e:
                 _logger.error(f"Error executing tool {tool_name}: {e}")
                 # Create error response
+                error_result = {'success': False, 'error': str(e)}
                 self.env['ai.chat.message'].create({
                     'session_id': session.id,
                     'role': 'tool',
-                    'content': json.dumps({'error': str(e)}),
+                    'content': json.dumps(error_result),
                     'tool_call_id': tc['id'],
-                    'metadata': json.dumps({'tool_name': tool_name}),
+                    'metadata': json.dumps({'tool_name': tool_name, 'error': True}),
                 })
 
-        # After tools execute, call AI again with tool results
-        # This would trigger another API call to get the final response
-        # For now, just notify the user
-        ai_bot = self.env['res.partner'].sudo().search([
-            ('name', '=', 'AI Assistant Bot')
-        ], limit=1)
+        # After tools execute, call AI again with tool results to get final response
+        _logger.info("Calling AI again with tool results to get final response")
 
-        if ai_bot:
-            tool_message = "Processing your request with tools..."
-            formatted_tool_message = self._format_ai_message_body(tool_message)
-            self.message_post(
-                body=formatted_tool_message,
-                author_id=ai_bot.id,
-                message_type='comment',
-                subtype_xmlid='mail.mt_comment'
+        # Get updated messages including tool results
+        messages = session.get_messages_for_api()
+        messages.insert(0, {
+            'role': 'system',
+            'content': system_prompt
+        })
+
+        # Call AI again (without tools this time to force a final answer)
+        try:
+            final_response = self._call_openrouter_api(
+                openrouter_api_key,
+                openrouter_model,
+                messages,
+                tools=None  # Don't allow more tool calls, force final answer
             )
+
+            if final_response and final_response.get('choices'):
+                final_content = final_response['choices'][0]['message'].get('content', '')
+
+                # Create final assistant message
+                self.env['ai.chat.message'].create({
+                    'session_id': session.id,
+                    'role': 'assistant',
+                    'content': final_content,
+                })
+
+                # Post final response to channel
+                ai_bot = self.env['res.partner'].sudo().search([
+                    ('name', '=', 'AI Assistant Bot')
+                ], limit=1)
+
+                if ai_bot and final_content:
+                    formatted_body = self._format_ai_message_body(final_content)
+                    self.message_post(
+                        body=formatted_body,
+                        author_id=ai_bot.id,
+                        message_type='comment',
+                        subtype_xmlid='mail.mt_comment'
+                    )
+
+        except Exception as e:
+            _logger.error(f"Error getting final AI response after tool execution: {e}")
+            # Post error message
+            ai_bot = self.env['res.partner'].sudo().search([
+                ('name', '=', 'AI Assistant Bot')
+            ], limit=1)
+
+            if ai_bot:
+                error_message = f"I executed the tools but encountered an error getting the final response: {str(e)}"
+                formatted_error = self._format_ai_message_body(error_message)
+                self.message_post(
+                    body=formatted_error,
+                    author_id=ai_bot.id,
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment'
+                )
