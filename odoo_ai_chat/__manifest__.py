@@ -21,7 +21,7 @@
     'website': 'https://www.yourcompany.com',
     'license': 'LGPL-3',
     'images': ['static/description/icon.png'],
-    'depends': ['base', 'web'],
+    'depends': ['base', 'web', 'mail'],
     'data': [
         'security/ir.model.access.csv',
         'views/ai_chat_views.xml',
