@@ -79,12 +79,14 @@ class MailChannel(models.Model):
         # Also skip if AI bot not found to prevent errors
         if ai_bot and message.author_id.id != ai_bot.id:
             _logger.info(f"Processing AI message from user, starting async thread")
-            _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_id={message.id}")
+            # Get message content before starting thread (avoid cursor issues)
+            message_body = message.body or ''
+            _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_body_length={len(message_body)}")
             # Process AI message asynchronously to avoid blocking the UI
             # Use threading to process in background with a new cursor
             thread = threading.Thread(
                 target=self._process_ai_message_async,
-                args=(self.env.cr.dbname, self.env.uid, self.id, message.id)
+                args=(self.env.cr.dbname, self.env.uid, self.id, message_body)
             )
             thread.daemon = True
             thread.start()
@@ -92,20 +94,35 @@ class MailChannel(models.Model):
 
         return message
 
-    def _format_ai_message_body(self, content):
-        """Format AI message content as HTML for proper display in Discuss"""
-        if not content:
+    def _format_ai_message_body(self, content, graph_data=None):
+        """Format AI message content as HTML for proper display in Discuss
+
+        Args:
+            content: Text content to format
+            graph_data: Optional dict with graph image data (base64)
+        """
+        if not content and not graph_data:
             return ''
 
         # Use Odoo's plaintext2html to convert plain text to HTML
         # This preserves line breaks and formats the text properly
-        html_content = plaintext2html(content)
+        html_content = plaintext2html(content) if content else ''
+
+        # Embed graph if provided
+        if graph_data and graph_data.get('image_base64'):
+            # Add graph image inline
+            graph_html = f'''<div style="margin: 15px 0;">
+                <img src="data:image/png;base64,{graph_data['image_base64']}"
+                     style="max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
+                     alt="Generated Graph"/>
+            </div>'''
+            html_content = html_content + graph_html
 
         return html_content
 
-    def _process_ai_message_async(self, dbname, uid, channel_id, message_id):
+    def _process_ai_message_async(self, dbname, uid, channel_id, message_body):
         """Process AI message asynchronously in a separate thread with new cursor"""
-        _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}, message {message_id}")
+        _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}")
         try:
             # Create a new registry and cursor for this thread
             import odoo
@@ -116,12 +133,11 @@ class MailChannel(models.Model):
                 _logger.info(f"[ASYNC] New cursor created")
                 env = api.Environment(cr, uid, {})
                 channel = env['mail.channel'].browse(channel_id)
-                message = env['mail.message'].browse(message_id)
 
-                _logger.info(f"[ASYNC] About to process message: {message.body[:50] if message.body else 'NO BODY'}")
+                _logger.info(f"[ASYNC] About to process message: {message_body[:50] if message_body else 'NO BODY'}")
 
                 # Process the AI message
-                channel._process_ai_message(message)
+                channel._process_ai_message(message_body)
 
                 # Commit the transaction
                 cr.commit()
@@ -152,8 +168,12 @@ class MailChannel(models.Model):
             except Exception as post_error:
                 _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
 
-    def _process_ai_message(self, user_message):
-        """Process user message and generate AI response"""
+    def _process_ai_message(self, user_message_body):
+        """Process user message and generate AI response
+
+        Args:
+            user_message_body: String content of the user's message
+        """
         try:
             # Get or create AI session for this channel
             if not self.ai_session_id:
@@ -170,7 +190,7 @@ class MailChannel(models.Model):
             user_msg = self.env['ai.chat.message'].create({
                 'session_id': session.id,
                 'role': 'user',
-                'content': user_message.body if hasattr(user_message, 'body') else str(user_message),
+                'content': user_message_body,
             })
 
             # Get AI configuration
@@ -351,6 +371,7 @@ Use tools when needed to provide accurate, data-driven responses."""
 
         # Execute tools and create tool response messages
         mcp_server = self.env['mcp.server'].sudo()
+        graph_data = None  # Track graph data if generated
 
         for tc in tool_calls:
             try:
@@ -359,6 +380,11 @@ Use tools when needed to provide accurate, data-driven responses."""
 
                 _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
                 result = mcp_server.call_tool(tool_name, tool_args)
+
+                # Extract graph data if this was a generate_graph call
+                if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
+                    graph_data = {'image_base64': result['image_base64']}
+                    _logger.info(f"Graph generated successfully, image size: {len(result['image_base64'])} chars")
 
                 # Create tool response message
                 self.env['ai.chat.message'].create({
@@ -416,7 +442,8 @@ Use tools when needed to provide accurate, data-driven responses."""
                 ], limit=1)
 
                 if ai_bot and final_content:
-                    formatted_body = self._format_ai_message_body(final_content)
+                    # Format body with graph if available
+                    formatted_body = self._format_ai_message_body(final_content, graph_data=graph_data)
                     self.message_post(
                         body=formatted_body,
                         author_id=ai_bot.id,
