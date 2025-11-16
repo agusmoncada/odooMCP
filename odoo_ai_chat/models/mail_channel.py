@@ -245,7 +245,10 @@ class MailChannel(models.Model):
                     self.env.cr.execute('SAVEPOINT thinking_message')
                     try:
                         thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
-                        thinking_message = self.with_context(mail_create_nosubscribe=True).message_post(
+                        thinking_message = self.with_context(
+                            mail_create_nosubscribe=True,
+                            mail_channel_noautofollow=True
+                        ).message_post(
                             body=thinking_body,
                             author_id=ai_bot.id,
                             message_type='comment',
@@ -326,6 +329,16 @@ class MailChannel(models.Model):
             if len(messages) > 15:
                 _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
                 messages = messages[-15:]
+
+                # After truncation, ensure we don't start with orphaned tool messages
+                # (tool results without their corresponding assistant tool_calls)
+                while messages and messages[0].get('role') == 'tool':
+                    removed_msg = messages.pop(0)
+                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
+
+                if not messages:
+                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
+                    messages = [session.get_messages_for_api()[-1]]
 
             # Add system prompt
             messages.insert(0, {
@@ -735,6 +748,16 @@ Remember: Execute ALL required tool calls before providing a final text response
                 _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
                 messages = messages[-15:]
 
+                # After truncation, ensure we don't start with orphaned tool messages
+                # (tool results without their corresponding assistant tool_calls)
+                while messages and messages[0].get('role') == 'tool':
+                    removed_msg = messages.pop(0)
+                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
+
+                if not messages:
+                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
+                    messages = [session.get_messages_for_api()[-1]]
+
             messages.insert(0, {
                 'role': 'system',
                 'content': system_prompt
@@ -821,7 +844,13 @@ Remember: Execute ALL required tool calls before providing a final text response
             if current_content:
                 # Format body with graph if available
                 formatted_body = self._format_ai_message_body(current_content, graph_data=graph_data)
-                posted_message = self.message_post(
+
+                # Use context to prevent auto-updating channel member (seen/fetched fields)
+                # This avoids concurrent update conflicts with user UI actions
+                posted_message = self.with_context(
+                    mail_create_nosubscribe=True,
+                    mail_channel_noautofollow=True
+                ).message_post(
                     body=formatted_body,
                     author_id=ai_bot.id,
                     message_type='comment',
