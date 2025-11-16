@@ -81,15 +81,21 @@ class AIChatSession(models.Model):
         self.write({'active': True})
 
     def _get_ai_bot_partner(self):
-        """Get or create AI bot partner
+        """Get or create AI bot partner with user account
 
-        The AI bot appears as a contact in Discuss that you can:
+        The AI bot needs a user account to:
+        - Appear in Discuss contacts
+        - Be added to group chats
+        - Participate in conversations
+
+        The bot appears as a contact in Discuss that you can:
         - Start 1-on-1 chats with
         - Add to group conversations
         - @mention in any channel
         """
-        bot = self.env['res.partner'].sudo().search([
-            ('email', '=', 'ai.assistant@odoo.local')
+        # Check if AI user already exists
+        ai_user = self.env['res.users'].sudo().search([
+            ('login', '=', 'ai.assistant@odoo.local')
         ], limit=1)
 
         # Read AI icon from module's static folder
@@ -103,30 +109,54 @@ class AIChatSession(models.Model):
             with open(icon_path, 'rb') as icon_file:
                 image_data = base64.b64encode(icon_file.read())
 
-        if not bot:
-            bot = self.env['res.partner'].sudo().create({
-                'name': 'AI Assistant',  # Shorter, cleaner name
+        if not ai_user:
+            # Check for old partner-only bot (migration from previous version)
+            old_partner_bot = self.env['res.partner'].sudo().search([
+                ('email', '=', 'ai.assistant@odoo.local'),
+                ('user_ids', '=', False)  # Partner without user
+            ], limit=1)
+
+            # Create AI user (this automatically creates the partner or links to existing one)
+            # Use internal user to avoid portal limitations
+            create_vals = {
+                'name': 'AI Assistant',
+                'login': 'ai.assistant@odoo.local',
                 'email': 'ai.assistant@odoo.local',
                 'active': True,
-                'is_company': False,
-                'type': 'contact',
                 'image_1920': image_data,
-                'im_status': 'online',  # Always show as online
+                'notification_type': 'inbox',
+                'odoobot_state': 'disabled',  # Disable OdooBot tips
+                # Use minimal groups to avoid consuming license
+                'groups_id': [(6, 0, [
+                    self.env.ref('base.group_user').id,  # Internal user (needed for Discuss)
+                ])],
+            }
+
+            # If old partner exists, link to it instead of creating new partner
+            if old_partner_bot:
+                create_vals['partner_id'] = old_partner_bot.id
+
+            ai_user = self.env['res.users'].sudo().create(create_vals)
+
+            # Update partner with additional info
+            ai_user.partner_id.sudo().write({
+                'im_status': 'online',
+                'type': 'contact',
                 'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
             })
         else:
-            # Update existing bot to ensure it's visible and online
+            # Update existing user's partner
             update_vals = {
-                'name': 'AI Assistant',  # Update name if it was the old "AI Assistant Bot"
+                'name': 'AI Assistant',
                 'im_status': 'online',
                 'active': True,
                 'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
             }
-            if image_data and not bot.image_1920:
+            if image_data and not ai_user.partner_id.image_1920:
                 update_vals['image_1920'] = image_data
-            bot.sudo().write(update_vals)
+            ai_user.partner_id.sudo().write(update_vals)
 
-        return bot
+        return ai_user.partner_id
 
     def action_create_discuss_channel(self):
         """Create or link to a Discuss channel"""

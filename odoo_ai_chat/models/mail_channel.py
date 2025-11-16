@@ -262,21 +262,22 @@ class MailChannel(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
-                        _logger.info(f"Posted thinking message {thinking_message.id} to channel {self.id}")
+                        thinking_message_id = thinking_message.id
+                        _logger.info(f"Posted thinking message {thinking_message_id} to channel {self.id}")
 
-                        # Flush and notify immediately so user sees it
-                        self.env.flush_all()
-                        try:
-                            self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                                'id': self.id,
-                                'message': thinking_message.message_format()[0]
-                            })
-                            _logger.info(f"Bus notification sent for thinking message")
-                        except Exception as bus_error:
-                            _logger.warning(f"Could not send bus notification for thinking message: {bus_error}")
-
-                        # Success - release savepoint
+                        # Success - release savepoint and COMMIT immediately
+                        # This makes the thinking message visible to Discuss right away
                         self.env.cr.execute('RELEASE SAVEPOINT thinking_message')
+                        self.env.cr.commit()
+                        _logger.info(f"Committed thinking message - should be visible in Discuss now")
+
+                        # After commit, clear cache to prevent stale data issues
+                        # Store thinking message ID for later deletion
+                        self.env.clear()
+                        thinking_message = thinking_message_id  # Store ID instead of record
+
+                        # Bus notification is sent automatically on commit by Odoo
+                        # No need for manual notification
 
                     except Exception as e:
                         # Failed to post thinking message - rollback savepoint and continue
@@ -332,21 +333,11 @@ class MailChannel(models.Model):
             # Get messages for API
             messages = session.get_messages_for_api()
 
-            # Truncate conversation history if too long to prevent API errors
-            # Keep last 15 messages (reasonable context window)
-            if len(messages) > 15:
-                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
-                messages = messages[-15:]
-
-                # After truncation, ensure we don't start with orphaned tool messages
-                # (tool results without their corresponding assistant tool_calls)
-                while messages and messages[0].get('role') == 'tool':
-                    removed_msg = messages.pop(0)
-                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
-
-                if not messages:
-                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
-                    messages = [session.get_messages_for_api()[-1]]
+            # Summarize conversation history if too long to prevent API errors
+            # Instead of truncating, we summarize old messages to preserve context
+            if len(messages) > 20:
+                _logger.info(f"Conversation long ({len(messages)} messages), creating summary")
+                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model)
 
             # Add system prompt
             messages.insert(0, {
@@ -418,8 +409,11 @@ class MailChannel(models.Model):
                         try:
                             self.env.cr.execute('SAVEPOINT delete_thinking')
                             try:
-                                thinking_message.unlink()
-                                _logger.info(f"Deleted thinking message {thinking_message.id}")
+                                # thinking_message is now an ID, need to browse it
+                                msg_to_delete = self.env['mail.message'].browse(thinking_message)
+                                if msg_to_delete.exists():
+                                    msg_to_delete.unlink()
+                                    _logger.info(f"Deleted thinking message {thinking_message}")
                                 self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
                             except Exception as e:
                                 _logger.warning(f"Could not delete thinking message: {e}")
@@ -464,8 +458,11 @@ class MailChannel(models.Model):
                 try:
                     self.env.cr.execute('SAVEPOINT delete_thinking_error')
                     try:
-                        thinking_message.unlink()
-                        _logger.info(f"Deleted thinking message due to error")
+                        # thinking_message is now an ID, need to browse it
+                        msg_to_delete = self.env['mail.message'].browse(thinking_message)
+                        if msg_to_delete.exists():
+                            msg_to_delete.unlink()
+                            _logger.info(f"Deleted thinking message due to error")
                         self.env.cr.execute('RELEASE SAVEPOINT delete_thinking_error')
                     except Exception as del_error:
                         _logger.warning(f"Could not delete thinking message on error: {del_error}")
@@ -594,6 +591,91 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         return prompt
 
+    def _summarize_conversation(self, messages, api_key, model):
+        """Summarize older messages when conversation gets too long
+
+        This method creates a summary of older messages to reduce token usage
+        while preserving recent context (similar to Claude's approach).
+
+        Args:
+            messages: List of conversation messages
+            api_key: OpenRouter API key
+            model: Model to use for summarization
+
+        Returns:
+            List of messages with summary + recent messages
+        """
+        try:
+            # Keep last 10 messages intact for immediate context
+            # Summarize everything before that
+            recent_messages = messages[-10:]
+            old_messages = messages[:-10]
+
+            if not old_messages:
+                # Nothing to summarize
+                return messages
+
+            # Create a summarization prompt
+            summary_prompt = """Please create a concise summary of this conversation history. Focus on:
+- Key topics discussed
+- Important data queries or searches performed
+- Records created or modified
+- Decisions or conclusions reached
+
+Keep the summary brief (2-3 paragraphs max) but include enough detail that the conversation can continue naturally."""
+
+            # Build messages for summarization call
+            summarization_messages = [
+                {'role': 'system', 'content': summary_prompt}
+            ]
+
+            # Add old messages to summarize
+            for msg in old_messages:
+                # Skip tool messages in summary - they're too verbose
+                if msg.get('role') == 'tool':
+                    continue
+                summarization_messages.append(msg)
+
+            _logger.info(f"Summarizing {len(old_messages)} old messages (keeping last 10 intact)")
+
+            # Call API to get summary
+            summary_response = self._call_openrouter_api(
+                api_key,
+                model,
+                summarization_messages,
+                tools=None  # No tools for summarization
+            )
+
+            if summary_response and summary_response.get('choices'):
+                summary_text = summary_response['choices'][0]['message'].get('content', '')
+
+                if summary_text:
+                    # Create summary message and prepend to recent messages
+                    summary_message = {
+                        'role': 'system',
+                        'content': f"[Previous conversation summary]\n{summary_text}\n[End of summary - continuing with recent messages]"
+                    }
+
+                    result_messages = [summary_message] + recent_messages
+                    _logger.info(f"Created summary, reduced from {len(messages)} to {len(result_messages)} messages")
+                    return result_messages
+                else:
+                    _logger.warning("Summarization returned empty content")
+            else:
+                _logger.warning("Summarization API call failed")
+
+        except Exception as e:
+            _logger.error(f"Error during conversation summarization: {e}")
+
+        # Fallback: If summarization fails, just truncate to last 15 messages
+        # Remove orphaned tool messages from the start
+        truncated = messages[-15:]
+        while truncated and truncated[0].get('role') == 'tool':
+            truncated.pop(0)
+
+        _logger.warning(f"Summarization failed, falling back to truncation: {len(messages)} -> {len(truncated)} messages")
+        return truncated if truncated else messages[-1:]
+
     def _call_openrouter_api(self, api_key, model, messages, tools=None):
         """Call OpenRouter API"""
         url = "https://openrouter.ai/api/v1/chat/completions"
@@ -648,7 +730,7 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         # Allow up to 10 iterations of tool calls to prevent infinite loops
         # Most tasks complete in 2-3 iterations, but complex workflows may need more
-        max_iterations = 10
+        max_iterations = 20  # Allow up to 20 rounds of tool calls
         iteration = 0
 
         # Keep calling AI until it stops making tool calls (task is complete)
@@ -751,20 +833,10 @@ Remember: Execute ALL required tool calls before providing a final text response
             # Get updated messages including tool results
             messages = session.get_messages_for_api()
 
-            # Truncate conversation history if too long
-            if len(messages) > 15:
-                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
-                messages = messages[-15:]
-
-                # After truncation, ensure we don't start with orphaned tool messages
-                # (tool results without their corresponding assistant tool_calls)
-                while messages and messages[0].get('role') == 'tool':
-                    removed_msg = messages.pop(0)
-                    _logger.warning(f"Removed orphaned tool message at start of truncated conversation: {removed_msg.get('name', 'unknown')}")
-
-                if not messages:
-                    _logger.error("All messages were orphaned tool messages after truncation - keeping last message only")
-                    messages = [session.get_messages_for_api()[-1]]
+            # Summarize conversation if too long
+            if len(messages) > 20:
+                _logger.info(f"Conversation long ({len(messages)} messages) during tool loop, creating summary")
+                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model)
 
             messages.insert(0, {
                 'role': 'system',
@@ -808,7 +880,26 @@ Remember: Execute ALL required tool calls before providing a final text response
         # After the loop completes, post the final response to the channel
         if iteration >= max_iterations:
             _logger.warning(f"Reached max iterations ({max_iterations}), stopping tool call loop")
-            current_content = current_content or "I completed the operations but reached the maximum number of steps."
+            # Ask AI for a summary if we hit the limit
+            if not current_content:
+                try:
+                    summary_messages = messages + [{
+                        'role': 'system',
+                        'content': f'You reached the maximum number of tool execution rounds ({max_iterations}). Please provide a brief summary of what you accomplished and what remains to be done.'
+                    }]
+                    summary_response = self._call_openrouter_api(
+                        openrouter_api_key,
+                        openrouter_model,
+                        summary_messages,
+                        tools=None
+                    )
+                    if summary_response and summary_response.get('choices'):
+                        current_content = summary_response['choices'][0]['message'].get('content', '')
+                except Exception as e:
+                    _logger.error(f"Failed to get summary after max iterations: {e}")
+
+            if not current_content:
+                current_content = f"I completed {iteration} operations but reached the maximum number of steps allowed in one conversation turn. Please let me know if you'd like me to continue or if there's anything else I can help with."
 
         # Create final assistant message if we have content
         if current_content:
@@ -823,8 +914,11 @@ Remember: Execute ALL required tool calls before providing a final text response
             try:
                 self.env.cr.execute('SAVEPOINT delete_thinking')
                 try:
-                    thinking_message.unlink()
-                    _logger.info(f"Deleted thinking message before posting final response")
+                    # thinking_message is now an ID, need to browse it
+                    msg_to_delete = self.env['mail.message'].browse(thinking_message)
+                    if msg_to_delete.exists():
+                        msg_to_delete.unlink()
+                        _logger.info(f"Deleted thinking message before posting final response")
                     self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
                 except Exception as e:
                     _logger.warning(f"Could not delete thinking message: {e}")
