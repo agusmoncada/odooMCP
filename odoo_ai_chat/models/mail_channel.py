@@ -62,22 +62,27 @@ class MailChannel(models.Model):
         _logger.info(f"message_post called on channel {self.id} ({self.name}), is_ai_channel={self.is_ai_channel}, message_author_id={message.author_id.id if message.author_id else None}")
 
         # Check if this is an AI channel and message has an author
-        if self.is_ai_channel and message.author_id:
-            ai_bot = self.env['res.partner'].sudo().search([
-                ('name', '=', 'AI Assistant Bot'),
-                ('email', '=', 'ai.assistant@odoo.local')
-            ], limit=1)
+        # Skip processing if message has no author to prevent recursion
+        if not self.is_ai_channel or not message.author_id:
+            return message
 
-            _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={message.author_id.id}")
+        ai_bot = self.env['res.partner'].sudo().search([
+            ('name', '=', 'AI Assistant Bot'),
+            ('email', '=', 'ai.assistant@odoo.local')
+        ], limit=1)
 
-            # Only process if message is from user, not from AI bot
-            if ai_bot and message.author_id.id != ai_bot.id:
-                _logger.info(f"Processing AI message from user")
-                # Process AI message
-                try:
-                    self._process_ai_message(message)
-                except Exception as e:
-                    _logger.error(f"Error processing AI message: {e}", exc_info=True)
+        _logger.info(f"AI channel detected, ai_bot={ai_bot.id if ai_bot else None}, message_author={message.author_id.id}")
+
+        # Only process if message is from user, not from AI bot
+        # Also skip if AI bot not found to prevent errors
+        if ai_bot and message.author_id.id != ai_bot.id:
+            _logger.info(f"Processing AI message from user")
+            # Process AI message
+            try:
+                self._process_ai_message(message)
+            except Exception as e:
+                # Log the error without exc_info if it might cause recursion issues
+                _logger.error(f"Error processing AI message: {str(e)}")
 
         return message
 
@@ -172,11 +177,21 @@ class MailChannel(models.Model):
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
-            # Post error message to channel
-            self.message_post(
-                body=f"Sorry, I encountered an error: {str(e)}",
-                message_type='notification'
-            )
+            # Post error message to channel with AI bot as author to prevent recursion
+            try:
+                ai_bot = self.env['res.partner'].sudo().search([
+                    ('name', '=', 'AI Assistant Bot')
+                ], limit=1)
+
+                if ai_bot:
+                    self.with_context(mail_create_nosubscribe=True).message_post(
+                        body=f"Sorry, I encountered an error: {str(e)}",
+                        author_id=ai_bot.id,
+                        message_type='notification'
+                    )
+            except Exception as post_error:
+                # If even posting the error fails, just log it
+                _logger.error(f"Failed to post error message to channel: {post_error}")
 
     def _build_context_aware_prompt(self):
         """Build context-aware system prompt"""
