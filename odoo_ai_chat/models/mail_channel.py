@@ -104,24 +104,30 @@ class MailChannel(models.Model):
             content: Text content to format
             graph_data: Optional dict with graph image data (base64)
         """
+        from markupsafe import Markup
+
         if not content and not graph_data:
             return ''
 
-        # Use Odoo's plaintext2html to convert plain text to HTML
-        # This preserves line breaks and formats the text properly
-        html_content = plaintext2html(content) if content else ''
+        # Build HTML manually to avoid escaping issues
+        # Convert newlines to <br/> tags for proper formatting
+        if content:
+            # Escape any HTML in the content text to prevent injection
+            import html
+            escaped_content = html.escape(content)
+            # Convert newlines to <br/> tags
+            html_content = escaped_content.replace('\n', '<br/>')
+        else:
+            html_content = ''
 
-        # Embed graph if provided
+        # Embed graph if provided - this HTML should NOT be escaped
         if graph_data and graph_data.get('image_base64'):
             # Add graph image inline
-            graph_html = f'''<div style="margin: 15px 0;">
-                <img src="data:image/png;base64,{graph_data['image_base64']}"
-                     style="max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                     alt="Generated Graph"/>
-            </div>'''
+            graph_html = f'<div style="margin: 15px 0;"><img src="data:image/png;base64,{graph_data["image_base64"]}" style="max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);" alt="Generated Graph"/></div>'
             html_content = html_content + graph_html
 
-        return html_content
+        # Mark as safe HTML so Odoo doesn't escape it
+        return Markup(html_content)
 
     def _process_ai_message_async(self, dbname, uid, channel_id, message_body, start_time=None):
         """Process AI message asynchronously in a separate thread with new cursor"""
