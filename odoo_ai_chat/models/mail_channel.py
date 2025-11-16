@@ -197,6 +197,24 @@ class MailChannel(models.Model):
             user_message_body: String content of the user's message
         """
         try:
+            # Show AI bot as "typing" - notify channel members
+            ai_bot = self.env['res.partner'].sudo().search([
+                ('name', '=', 'AI Assistant Bot'),
+                ('email', '=', 'ai.assistant@odoo.local')
+            ], limit=1)
+
+            if ai_bot:
+                try:
+                    # Trigger typing notification
+                    self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                        'channel_id': self.id,
+                        'partner_id': ai_bot.id,
+                        'is_typing': True,
+                    })
+                    _logger.info(f"AI bot typing indicator started for channel {self.id}")
+                except Exception as e:
+                    _logger.warning(f"Could not send typing notification: {e}")
+
             # Get or create AI session for this channel
             if not self.ai_session_id:
                 session = self.env['ai.chat.session'].create({
@@ -299,6 +317,16 @@ class MailChannel(models.Model):
                     ], limit=1)
 
                     if ai_bot:
+                        # Stop typing indicator
+                        try:
+                            self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                                'channel_id': self.id,
+                                'partner_id': ai_bot.id,
+                                'is_typing': False,
+                            })
+                        except Exception:
+                            pass
+
                         # Format the message body for proper display in Discuss
                         formatted_body = self._format_ai_message_body(content)
                         posted_message = self.message_post(
@@ -331,6 +359,16 @@ class MailChannel(models.Model):
                 ], limit=1)
 
                 if ai_bot:
+                    # Stop typing indicator on error
+                    try:
+                        self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                            'channel_id': self.id,
+                            'partner_id': ai_bot.id,
+                            'is_typing': False,
+                        })
+                    except Exception:
+                        pass
+
                     error_message = f"Sorry, I encountered an error: {str(e)}"
                     formatted_error = self._format_ai_message_body(error_message)
                     posted_message = self.with_context(mail_create_nosubscribe=True).message_post(
@@ -502,6 +540,16 @@ Use tools when needed to provide accurate, data-driven responses."""
                 ], limit=1)
 
                 if ai_bot and final_content:
+                    # Stop typing indicator
+                    try:
+                        self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                            'channel_id': self.id,
+                            'partner_id': ai_bot.id,
+                            'is_typing': False,
+                        })
+                    except Exception:
+                        pass
+
                     # Format body with graph if available
                     formatted_body = self._format_ai_message_body(final_content, graph_data=graph_data)
                     posted_message = self.message_post(
