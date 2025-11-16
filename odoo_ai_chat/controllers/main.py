@@ -195,7 +195,7 @@ class AIChatController(http.Controller):
         tools = mcp_registry.list_tools()
 
         graph_data = None
-        max_iterations = 10  # Prevent infinite loops (allows batching up to 10 operations)
+        max_iterations = 20  # Prevent infinite loops (allows batching up to 20 operations)
         iteration = 0
 
         # Loop to handle multiple rounds of tool calls
@@ -302,16 +302,8 @@ class AIChatController(http.Controller):
 
                 # If the AI wants to execute more tools, loop will continue
                 if response.get('requires_tool_execution'):
-                    # Save the assistant message with new tool calls
-                    tool_calls_for_display = response.get('tool_calls', [])
-                    Message.create({
-                        'session_id': session.id,
-                        'role': 'assistant',
-                        'content': response.get('message') or '',
-                        'tool_calls': json.dumps(tool_calls_for_display)
-                    })
-                    http.request.env.cr.commit()
-                    # Update current_messages for next iteration
+                    # Don't save intermediate assistant messages - they clutter the UI
+                    # Just update current_messages for the next iteration
                     current_messages = response.get('messages', current_messages)
                     continue  # Loop back to execute more tools
 
@@ -379,6 +371,15 @@ class AIChatController(http.Controller):
 
             messages = []
             for m in session.message_ids.sorted('create_date'):
+                # Skip tool result messages - they're technical implementation details
+                if m.role == 'tool':
+                    continue
+
+                # Also skip assistant messages with tool_calls but no content
+                # (these are intermediate coordination messages)
+                if m.role == 'assistant' and m.tool_calls and not m.content:
+                    continue
+
                 msg_data = {
                     'id': m.id,
                     'role': m.role,
