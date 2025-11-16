@@ -227,30 +227,46 @@ class MailChannel(models.Model):
 
             if ai_bot:
                 # Post a visible "AI is thinking..." message for immediate user feedback
+                # Wrap in savepoint to prevent serialization errors from aborting the transaction
                 try:
-                    thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
-                    thinking_message = self.with_context(mail_create_nosubscribe=True).message_post(
-                        body=thinking_body,
-                        author_id=ai_bot.id,
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_comment'
-                    )
-                    _logger.info(f"Posted thinking message {thinking_message.id} to channel {self.id}")
-
-                    # Flush and notify immediately so user sees it
-                    self.env.flush_all()
+                    self.env.cr.execute('SAVEPOINT thinking_message')
                     try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                            'id': self.id,
-                            'message': thinking_message.message_format()[0]
-                        })
-                        _logger.info(f"Bus notification sent for thinking message")
-                    except Exception as bus_error:
-                        _logger.warning(f"Could not send bus notification for thinking message: {bus_error}")
+                        thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
+                        thinking_message = self.with_context(mail_create_nosubscribe=True).message_post(
+                            body=thinking_body,
+                            author_id=ai_bot.id,
+                            message_type='comment',
+                            subtype_xmlid='mail.mt_comment'
+                        )
+                        _logger.info(f"Posted thinking message {thinking_message.id} to channel {self.id}")
+
+                        # Flush and notify immediately so user sees it
+                        self.env.flush_all()
+                        try:
+                            self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                                'id': self.id,
+                                'message': thinking_message.message_format()[0]
+                            })
+                            _logger.info(f"Bus notification sent for thinking message")
+                        except Exception as bus_error:
+                            _logger.warning(f"Could not send bus notification for thinking message: {bus_error}")
+
+                        # Success - release savepoint
+                        self.env.cr.execute('RELEASE SAVEPOINT thinking_message')
+
+                    except Exception as e:
+                        # Failed to post thinking message - rollback savepoint and continue
+                        _logger.warning(f"Could not post thinking message, rolling back: {e}")
+                        self.env.cr.execute('ROLLBACK TO SAVEPOINT thinking_message')
+                        self.env.cr.execute('RELEASE SAVEPOINT thinking_message')
+                        thinking_message = None  # Ensure it's None so we don't try to delete it later
+
                 except Exception as e:
-                    _logger.warning(f"Could not post thinking message: {e}")
+                    _logger.error(f"Critical error with thinking message savepoint: {e}")
+                    thinking_message = None
 
                 # Also try typing notification (might not work for bots, but doesn't hurt)
+                # Don't use savepoint here as it's just a bus notification
                 try:
                     self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
                         'channel_id': self.id,
@@ -360,10 +376,17 @@ class MailChannel(models.Model):
                     # Delete thinking message before posting real response
                     if thinking_message:
                         try:
-                            thinking_message.unlink()
-                            _logger.info(f"Deleted thinking message {thinking_message.id}")
-                        except Exception as e:
-                            _logger.warning(f"Could not delete thinking message: {e}")
+                            self.env.cr.execute('SAVEPOINT delete_thinking')
+                            try:
+                                thinking_message.unlink()
+                                _logger.info(f"Deleted thinking message {thinking_message.id}")
+                                self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
+                            except Exception as e:
+                                _logger.warning(f"Could not delete thinking message: {e}")
+                                self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking')
+                                self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
+                        except Exception:
+                            pass  # Savepoint itself failed, just continue
 
                     # Post AI response to channel
                     ai_bot = self.env['res.partner'].sudo().search([
@@ -409,10 +432,20 @@ class MailChannel(models.Model):
             # Delete thinking message on error
             if thinking_message:
                 try:
-                    thinking_message.unlink()
-                    _logger.info(f"Deleted thinking message due to error")
-                except Exception as del_error:
-                    _logger.warning(f"Could not delete thinking message on error: {del_error}")
+                    self.env.cr.execute('SAVEPOINT delete_thinking_error')
+                    try:
+                        thinking_message.unlink()
+                        _logger.info(f"Deleted thinking message due to error")
+                        self.env.cr.execute('RELEASE SAVEPOINT delete_thinking_error')
+                    except Exception as del_error:
+                        _logger.warning(f"Could not delete thinking message on error: {del_error}")
+                        try:
+                            self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking_error')
+                            self.env.cr.execute('RELEASE SAVEPOINT delete_thinking_error')
+                        except Exception:
+                            pass  # Transaction may already be aborted
+                except Exception:
+                    pass  # Savepoint itself failed, just continue
 
             # Post error message to channel with AI bot as author to prevent recursion
             try:
@@ -476,6 +509,37 @@ CRITICAL INSTRUCTIONS FOR TOOL USAGE:
 - DO NOT respond with text like "Now I will create..." - actually execute the create_record tool
 - Continue using tools until the ENTIRE task is complete
 - Only provide a summary response AFTER all operations are finished
+
+ERROR HANDLING AND DUPLICATES:
+- When a tool call fails (e.g., duplicate record), CONTINUE with other tasks
+- Complete everything you CAN complete
+- In your final response:
+  1. List what was created successfully
+  2. Clearly explain what failed and WHY (e.g., "Tag 'Bug' already exists")
+  3. Ask the user for clarification on failed items (e.g., "Would you like me to use the existing 'Bug' tag or create a different one?")
+- NEVER let one failure stop the entire workflow
+- Be transparent about partial success
+
+EXAMPLE - Handling duplicates:
+User: "Create project X with stages A, B, C and tags Bug, Feature"
+→ Project X created successfully ✅
+→ Stage A created ✅
+→ Stage B created ✅
+→ Stage C created ✅
+→ Tag "Bug" failed: already exists ❌
+→ Tag "Feature" created ✅
+
+CORRECT response:
+"I've created:
+✅ Project 'X' (ID: 123)
+✅ Stages: A, B, C
+✅ Tag: Feature
+❌ Tag 'Bug' already exists in the system
+
+Would you like me to:
+1. Link the existing 'Bug' tag to your project?
+2. Create a new tag with a different name (e.g., 'Bug Fix')?
+3. Skip this tag?"
 
 GENERAL INSTRUCTIONS:
 - Respond in the user's language ({user.lang})
@@ -706,10 +770,17 @@ Remember: Execute ALL required tool calls before providing a final text response
         # Delete thinking message before posting real response
         if thinking_message:
             try:
-                thinking_message.unlink()
-                _logger.info(f"Deleted thinking message before posting final response")
-            except Exception as e:
-                _logger.warning(f"Could not delete thinking message: {e}")
+                self.env.cr.execute('SAVEPOINT delete_thinking')
+                try:
+                    thinking_message.unlink()
+                    _logger.info(f"Deleted thinking message before posting final response")
+                    self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
+                except Exception as e:
+                    _logger.warning(f"Could not delete thinking message: {e}")
+                    self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking')
+                    self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
+            except Exception:
+                pass  # Savepoint itself failed, just continue
 
         # Post final response to channel
         ai_bot = self.env['res.partner'].sudo().search([
