@@ -77,14 +77,32 @@ class MailChannel(models.Model):
             return message
 
         # Check if AI should respond in this channel:
-        # 1. AI bot is a member of this channel (DM or group chat), OR
-        # 2. Message @mentions the AI bot, OR
-        # 3. Channel is explicitly marked as AI channel (backward compatibility)
+        # 1. Channel is explicitly marked as AI channel (backward compatibility) - always respond
+        # 2. 1-on-1 chat with AI (only 2 members) - always respond
+        # 3. Group chat (3+ members) - ONLY respond when @mentioned
+        # This prevents AI from responding to every message in group chats and overloading the system
+
         ai_is_member = ai_bot.id in self.channel_partner_ids.ids
         ai_is_mentioned = ai_bot.id in message.partner_ids.ids
-        should_respond = ai_is_member or ai_is_mentioned or self.is_ai_channel
+        member_count = len(self.channel_partner_ids)
+        is_direct_message = member_count == 2 and ai_is_member  # 1-on-1 chat with AI
+        is_group_chat = member_count >= 3
 
-        _logger.info(f"message_post on channel {self.id} ({self.name}): ai_member={ai_is_member}, ai_mentioned={ai_is_mentioned}, is_ai_channel={self.is_ai_channel}, should_respond={should_respond}")
+        # Decision logic:
+        # - is_ai_channel: Always respond (backward compatibility for dedicated AI channels)
+        # - Direct message: Always respond (1-on-1 with AI)
+        # - Group chat: Only respond when @mentioned
+        if self.is_ai_channel:
+            should_respond = True
+        elif is_direct_message:
+            should_respond = True
+        elif is_group_chat:
+            should_respond = ai_is_mentioned
+        else:
+            # Fallback: only respond if @mentioned
+            should_respond = ai_is_mentioned
+
+        _logger.info(f"message_post on channel {self.id} ({self.name}): members={member_count}, ai_member={ai_is_member}, ai_mentioned={ai_is_mentioned}, is_ai_channel={self.is_ai_channel}, is_dm={is_direct_message}, is_group={is_group_chat}, should_respond={should_respond}")
 
         if should_respond:
             import time
