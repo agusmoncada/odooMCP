@@ -273,6 +273,7 @@ class MailChannel(models.Model):
                 # Handle tool calls if any
                 tool_calls = assistant_message.get('tool_calls')
                 if tool_calls:
+                    _logger.info(f"AI response includes {len(tool_calls)} tool calls, processing them")
                     # Process tool calls and get final response
                     self._process_tool_calls(
                         session,
@@ -284,6 +285,7 @@ class MailChannel(models.Model):
                         tools
                     )
                 else:
+                    _logger.info(f"AI response has no tool calls, posting directly to channel")
                     # Create assistant message
                     self.env['ai.chat.message'].create({
                         'session_id': session.id,
@@ -305,12 +307,20 @@ class MailChannel(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
+                        _logger.info(f"Posted AI message {posted_message.id} to channel {self.id}")
+
+                        # Flush to ensure message is saved before sending notification
+                        self.env.flush_all()
 
                         # Manually trigger bus notification to update UI
-                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                            'id': self.id,
-                            'message': posted_message.message_format()[0]
-                        })
+                        try:
+                            self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                                'id': self.id,
+                                'message': posted_message.message_format()[0]
+                            })
+                            _logger.info(f"Bus notification sent for message {posted_message.id}")
+                        except Exception as bus_error:
+                            _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -500,12 +510,20 @@ Use tools when needed to provide accurate, data-driven responses."""
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment'
                     )
+                    _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id}")
+
+                    # Flush to ensure message is saved before sending notification
+                    self.env.flush_all()
 
                     # Manually trigger bus notification to update UI
-                    self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                        'id': self.id,
-                        'message': posted_message.message_format()[0]
-                    })
+                    try:
+                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
+                            'id': self.id,
+                            'message': posted_message.message_format()[0]
+                        })
+                        _logger.info(f"Bus notification sent for message {posted_message.id}")
+                    except Exception as bus_error:
+                        _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
 
         except Exception as e:
             _logger.error(f"Error getting final AI response after tool execution: {e}")
@@ -523,6 +541,10 @@ Use tools when needed to provide accurate, data-driven responses."""
                     message_type='comment',
                     subtype_xmlid='mail.mt_comment'
                 )
+                _logger.info(f"Posted error message {posted_message.id} to channel {self.id}")
+
+                # Flush to ensure message is saved before sending notification
+                self.env.flush_all()
 
                 # Manually trigger bus notification to update UI
                 try:
@@ -530,5 +552,6 @@ Use tools when needed to provide accurate, data-driven responses."""
                         'id': self.id,
                         'message': posted_message.message_format()[0]
                     })
-                except Exception:
-                    pass  # Bus notification is optional
+                    _logger.info(f"Bus notification sent for error message {posted_message.id}")
+                except Exception as bus_error:
+                    _logger.error(f"Failed to send bus notification for error: {bus_error}", exc_info=True)
