@@ -247,19 +247,16 @@ class MailChannel(models.Model):
             ], limit=1)
 
             if ai_bot:
-                # Post a visible "AI is thinking..." message for immediate user feedback
-                # NOTE: For Discuss channels, we use typing indicator instead
-                # Only use thinking message for non-channel contexts (future: chatter)
-                # This avoids transaction conflicts from concurrent updates
-                thinking_message = None  # Skip thinking message for now
-
-                # Use typing indicator instead (better for Discuss)
+                # Send typing indicator IMMEDIATELY and commit so user sees it right away
                 try:
                     self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
                         'channel_id': self.id,
                         'partner_id': ai_bot.id,
                         'is_typing': True,
                     })
+                    # CRITICAL: Commit immediately so typing indicator appears in UI
+                    self.env.cr.commit()
+                    _logger.info(f"Typing indicator started and committed for channel {self.id}")
                 except Exception as e:
                     _logger.warning(f"Could not send typing notification: {e}")
 
@@ -296,8 +293,9 @@ class MailChannel(models.Model):
             messages = session.get_messages_for_api()
 
             # Summarize conversation history if too long to prevent API errors
-            # Instead of truncating, we summarize old messages to preserve context
-            if len(messages) > 20:
+            # Increased threshold from 20 to 30 to reduce summarization overhead
+            # Summarization adds 1-3 seconds per request
+            if len(messages) > 30:
                 _logger.info(f"Conversation long ({len(messages)} messages), creating summary")
                 messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model)
 
@@ -408,10 +406,9 @@ class MailChannel(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
-                        _logger.info(f"Posted AI message {posted_message.id} to channel {self.id}")
-
-                        # NOTE: Removed manual bus notification - Odoo's message_post() automatically
-                        # sends bus notifications when committing. See note in tool call path for details.
+                        # Commit immediately so message appears in UI without delay
+                        self.env.cr.commit()
+                        _logger.info(f"Posted AI message {posted_message.id} to channel {self.id} and committed")
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -941,9 +938,8 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                     message_type='comment',
                     subtype_xmlid='mail.mt_comment'
                 )
-                _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations")
-
-                # NOTE: Removed manual bus notification - Odoo's message_post() automatically
-                # sends bus notifications when committing. Our manual notification was being
+                # Commit immediately so message appears in UI without delay
+                self.env.cr.commit()
+                _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations and committed")
                 # sent BEFORE the transaction was committed, causing a race condition where
                 # Discuss received the notification but couldn't fetch the message yet.
