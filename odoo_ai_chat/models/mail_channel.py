@@ -315,6 +315,12 @@ class MailChannel(models.Model):
             # Get messages for API
             messages = session.get_messages_for_api()
 
+            # Truncate conversation history if too long to prevent API errors
+            # Keep last 15 messages (reasonable context window)
+            if len(messages) > 15:
+                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
+                messages = messages[-15:]
+
             # Add system prompt
             messages.insert(0, {
                 'role': 'system',
@@ -578,7 +584,19 @@ Remember: Execute ALL required tool calls before providing a final text response
         if tools:
             payload["tools"] = tools
 
+        # Log request details for debugging
+        _logger.info(f"OpenRouter API call: {len(messages)} messages, tools={'yes' if tools else 'no'}")
+
         response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+        # Better error handling - log response body on error
+        if not response.ok:
+            try:
+                error_body = response.json()
+                _logger.error(f"OpenRouter API error ({response.status_code}): {error_body}")
+            except Exception:
+                _logger.error(f"OpenRouter API error ({response.status_code}): {response.text}")
+
         response.raise_for_status()
 
         return response.json()
@@ -705,6 +723,12 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             # Get updated messages including tool results
             messages = session.get_messages_for_api()
+
+            # Truncate conversation history if too long
+            if len(messages) > 15:
+                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
+                messages = messages[-15:]
+
             messages.insert(0, {
                 'role': 'system',
                 'content': system_prompt
