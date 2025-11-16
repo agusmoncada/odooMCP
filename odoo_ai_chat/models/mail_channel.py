@@ -197,17 +197,12 @@ class MailChannel(models.Model):
                         subtype_xmlid='mail.mt_comment'
                     )
 
-                    # Manually trigger bus notification to update UI
-                    try:
-                        env['bus.bus']._sendone(channel, 'mail.channel/new_message', {
-                            'id': channel.id,
-                            'message': posted_message.message_format()[0]
-                        })
-                    except Exception:
-                        pass  # Bus notification is optional
-
+                    # Commit first, then Odoo will automatically send bus notifications
                     cr.commit()
-                    _logger.info(f"[ASYNC] Error message posted successfully")
+                    _logger.info(f"[ASYNC] Error message posted and committed successfully")
+
+                    # NOTE: Removed manual bus notification - it was being sent before commit,
+                    # causing race condition where Discuss couldn't fetch the message yet
         except Exception as post_error:
             _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
 
@@ -414,18 +409,8 @@ class MailChannel(models.Model):
                         )
                         _logger.info(f"Posted AI message {posted_message.id} to channel {self.id}")
 
-                        # Flush to ensure message is saved before sending notification
-                        self.env.flush_all()
-
-                        # Manually trigger bus notification to update UI
-                        try:
-                            self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                                'id': self.id,
-                                'message': posted_message.message_format()[0]
-                            })
-                            _logger.info(f"Bus notification sent for message {posted_message.id}")
-                        except Exception as bus_error:
-                            _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
+                        # NOTE: Removed manual bus notification - Odoo's message_post() automatically
+                        # sends bus notifications when committing. See note in tool call path for details.
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -473,14 +458,7 @@ class MailChannel(models.Model):
                         subtype_xmlid='mail.mt_comment'
                     )
 
-                    # Manually trigger bus notification to update UI
-                    try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                            'id': self.id,
-                            'message': posted_message.message_format()[0]
-                        })
-                    except Exception:
-                        pass  # Bus notification is optional
+                    # NOTE: Removed manual bus notification - Odoo handles this automatically on commit
             except Exception as post_error:
                 # If even posting the error fails, just log it
                 _logger.error(f"Failed to post error message to channel: {post_error}")
@@ -809,15 +787,7 @@ Remember: Execute ALL required tool calls before providing a final text response
                 )
                 _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations")
 
-                # Flush to ensure message is saved before sending notification
-                self.env.flush_all()
-
-                # Manually trigger bus notification to update UI
-                try:
-                    self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                        'id': self.id,
-                        'message': posted_message.message_format()[0]
-                    })
-                    _logger.info(f"Bus notification sent for message {posted_message.id}")
-                except Exception as bus_error:
-                    _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
+                # NOTE: Removed manual bus notification - Odoo's message_post() automatically
+                # sends bus notifications when committing. Our manual notification was being
+                # sent BEFORE the transaction was committed, causing a race condition where
+                # Discuss received the notification but couldn't fetch the message yet.
