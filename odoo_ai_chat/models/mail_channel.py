@@ -429,20 +429,40 @@ USER CONTEXT:
 - Timezone: {user.tz}
 - Company: {user.company_id.name if user.company_id else 'N/A'}
 
-INSTRUCTIONS:
+CRITICAL INSTRUCTIONS FOR TOOL USAGE:
+- You MUST complete ALL parts of multi-step tasks before providing a final response
+- If a user asks you to create multiple records (e.g., customer + project + stages), you MUST call create_record for EACH item
+- DO NOT respond with text like "Now I will create..." - actually execute the create_record tool
+- Continue using tools until the ENTIRE task is complete
+- Only provide a summary response AFTER all operations are finished
+
+GENERAL INSTRUCTIONS:
 - Respond in the user's language ({user.lang})
 - Use available tools to access and manipulate Odoo data
 - Be concise and professional
-- When using tools, wait for results before responding to the user
 - Provide clear, actionable answers based on real data
 
-Available tools allow you to:
+Available tools:
 - search_records: Query Odoo data (sales, customers, products, etc.)
-- create_record: Create new records
+- create_record: Create new records (use this for EVERY record that needs to be created)
 - write_record: Update existing records
 - generate_graph: Create visualizations when explicitly requested
 
-Use tools when needed to provide accurate, data-driven responses."""
+EXAMPLE - Multi-step task handling:
+User: "Create customer ACME and a project for them with 3 stages"
+CORRECT behavior:
+  1. Call create_record for res.partner (customer)
+  2. Call create_record for project.project (project)
+  3. Call create_record for project.task.type (stage 1)
+  4. Call create_record for project.task.type (stage 2)
+  5. Call create_record for project.task.type (stage 3)
+  6. Then respond: "Done! I created customer ACME, project X, and 3 stages"
+
+WRONG behavior:
+  1. Call create_record for res.partner
+  2. Respond: "Customer created. Now I will create the project..." ← NEVER DO THIS!
+
+Remember: Execute ALL required tool calls before providing a final text response."""
 
         return prompt
 
@@ -469,148 +489,168 @@ Use tools when needed to provide accurate, data-driven responses."""
         return response.json()
 
     def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
-        """Process tool calls from AI and get final response"""
+        """Process tool calls from AI and get final response
+
+        This method implements a loop that allows the AI to make multiple rounds of tool calls
+        until it completes the entire task. This is critical for multi-step operations like:
+        - Creating customer + project + stages + tags
+        - Searching for data, then updating multiple records based on results
+        - Any workflow that requires sequential tool execution
+        """
         _logger.info(f"Processing {len(tool_calls)} tool calls")
 
-        # Create assistant message with tool calls
-        tool_calls_data = []
-        for tc in tool_calls:
-            tool_calls_data.append({
-                'tool_call_id': tc['id'],
-                'name': tc['function']['name'],
-                'arguments': json.loads(tc['function']['arguments'])
+        # Track graph data across all iterations
+        graph_data = None
+        mcp_server = self.env['mcp.server.registry'].sudo()
+
+        # Allow up to 10 iterations of tool calls to prevent infinite loops
+        # Most tasks complete in 2-3 iterations, but complex workflows may need more
+        max_iterations = 10
+        iteration = 0
+
+        # Keep calling AI until it stops making tool calls (task is complete)
+        current_tool_calls = tool_calls
+        current_content = assistant_content
+
+        while current_tool_calls and iteration < max_iterations:
+            iteration += 1
+            _logger.info(f"Tool call iteration {iteration}/{max_iterations}, processing {len(current_tool_calls)} tool calls")
+
+            # Create assistant message with tool calls
+            tool_calls_data = []
+            for tc in current_tool_calls:
+                tool_calls_data.append({
+                    'tool_call_id': tc['id'],
+                    'name': tc['function']['name'],
+                    'arguments': json.loads(tc['function']['arguments'])
+                })
+
+            self.env['ai.chat.message'].create({
+                'session_id': session.id,
+                'role': 'assistant',
+                'content': current_content or '',
+                'tool_calls': json.dumps(tool_calls_data),
             })
 
-        self.env['ai.chat.message'].create({
-            'session_id': session.id,
-            'role': 'assistant',
-            'content': assistant_content or '',
-            'tool_calls': json.dumps(tool_calls_data),
-        })
+            # Execute all tool calls in this iteration
+            for tc in current_tool_calls:
+                try:
+                    tool_name = tc['function']['name']
+                    tool_args = json.loads(tc['function']['arguments'])
 
-        # Execute tools and create tool response messages
-        mcp_server = self.env['mcp.server.registry'].sudo()
-        graph_data = None  # Track graph data if generated
+                    _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                    result = mcp_server.call_tool(tool_name, tool_args)
 
-        for tc in tool_calls:
+                    # Extract graph data if this was a generate_graph call
+                    if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
+                        graph_data = {'image_base64': result['image_base64']}
+                        _logger.info(f"Graph generated successfully, image size: {len(result['image_base64'])} chars")
+
+                    # Create tool response message
+                    self.env['ai.chat.message'].create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(result),
+                        'tool_call_id': tc['id'],
+                        'metadata': json.dumps({'tool_name': tool_name}),
+                    })
+
+                except Exception as e:
+                    _logger.error(f"Error executing tool {tool_name}: {e}")
+                    # Create error response
+                    error_result = {'success': False, 'error': str(e)}
+                    self.env['ai.chat.message'].create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(error_result),
+                        'tool_call_id': tc['id'],
+                        'metadata': json.dumps({'tool_name': tool_name, 'error': True}),
+                    })
+
+            # After executing tools, call AI again with results
+            # IMPORTANT: Keep tools enabled so AI can make additional calls if needed
+            _logger.info("Calling AI again with tool results (tools still enabled)")
+
+            # Get updated messages including tool results
+            messages = session.get_messages_for_api()
+            messages.insert(0, {
+                'role': 'system',
+                'content': system_prompt
+            })
+
+            # Call AI again WITH tools enabled to allow multi-step operations
             try:
-                tool_name = tc['function']['name']
-                tool_args = json.loads(tc['function']['arguments'])
+                next_response = self._call_openrouter_api(
+                    openrouter_api_key,
+                    openrouter_model,
+                    messages,
+                    tools=tools  # CRITICAL: Keep tools enabled for multi-step tasks!
+                )
 
-                _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
-                result = mcp_server.call_tool(tool_name, tool_args)
+                if next_response and next_response.get('choices'):
+                    next_message = next_response['choices'][0]['message']
+                    current_content = next_message.get('content', '')
+                    current_tool_calls = next_message.get('tool_calls')
 
-                # Extract graph data if this was a generate_graph call
-                if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
-                    graph_data = {'image_base64': result['image_base64']}
-                    _logger.info(f"Graph generated successfully, image size: {len(result['image_base64'])} chars")
-
-                # Create tool response message
-                self.env['ai.chat.message'].create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(result),
-                    'tool_call_id': tc['id'],
-                    'metadata': json.dumps({'tool_name': tool_name}),
-                })
+                    # Check if AI wants to make more tool calls
+                    if current_tool_calls:
+                        _logger.info(f"AI wants to make {len(current_tool_calls)} more tool calls, continuing loop")
+                        # Loop will continue with these new tool calls
+                    else:
+                        # No more tool calls - AI is done, this is the final response
+                        _logger.info("AI provided final response with no more tool calls")
+                        # Break out of loop to post the final message
+                        break
+                else:
+                    _logger.warning("No response from AI after tool execution")
+                    current_tool_calls = None
+                    break
 
             except Exception as e:
-                _logger.error(f"Error executing tool {tool_name}: {e}")
-                # Create error response
-                error_result = {'success': False, 'error': str(e)}
-                self.env['ai.chat.message'].create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(error_result),
-                    'tool_call_id': tc['id'],
-                    'metadata': json.dumps({'tool_name': tool_name, 'error': True}),
+                _logger.error(f"Error calling AI after tool execution: {e}")
+                current_tool_calls = None
+                current_content = f"I completed some operations but encountered an error: {str(e)}"
+                break
+
+        # After the loop completes, post the final response to the channel
+        if iteration >= max_iterations:
+            _logger.warning(f"Reached max iterations ({max_iterations}), stopping tool call loop")
+            current_content = current_content or "I completed the operations but reached the maximum number of steps."
+
+        # Create final assistant message if we have content
+        if current_content:
+            self.env['ai.chat.message'].create({
+                'session_id': session.id,
+                'role': 'assistant',
+                'content': current_content,
+            })
+
+        # Post final response to channel
+        ai_bot = self.env['res.partner'].sudo().search([
+            ('name', '=', 'AI Assistant Bot')
+        ], limit=1)
+
+        if ai_bot:
+            # Stop typing indicator
+            try:
+                self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                    'channel_id': self.id,
+                    'partner_id': ai_bot.id,
+                    'is_typing': False,
                 })
+            except Exception:
+                pass
 
-        # After tools execute, call AI again with tool results to get final response
-        _logger.info("Calling AI again with tool results to get final response")
-
-        # Get updated messages including tool results
-        messages = session.get_messages_for_api()
-        messages.insert(0, {
-            'role': 'system',
-            'content': system_prompt
-        })
-
-        # Call AI again (without tools this time to force a final answer)
-        try:
-            final_response = self._call_openrouter_api(
-                openrouter_api_key,
-                openrouter_model,
-                messages,
-                tools=None  # Don't allow more tool calls, force final answer
-            )
-
-            if final_response and final_response.get('choices'):
-                final_content = final_response['choices'][0]['message'].get('content', '')
-
-                # Create final assistant message
-                self.env['ai.chat.message'].create({
-                    'session_id': session.id,
-                    'role': 'assistant',
-                    'content': final_content,
-                })
-
-                # Post final response to channel
-                ai_bot = self.env['res.partner'].sudo().search([
-                    ('name', '=', 'AI Assistant Bot')
-                ], limit=1)
-
-                if ai_bot and final_content:
-                    # Stop typing indicator
-                    try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
-                            'channel_id': self.id,
-                            'partner_id': ai_bot.id,
-                            'is_typing': False,
-                        })
-                    except Exception:
-                        pass
-
-                    # Format body with graph if available
-                    formatted_body = self._format_ai_message_body(final_content, graph_data=graph_data)
-                    posted_message = self.message_post(
-                        body=formatted_body,
-                        author_id=ai_bot.id,
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_comment'
-                    )
-                    _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id}")
-
-                    # Flush to ensure message is saved before sending notification
-                    self.env.flush_all()
-
-                    # Manually trigger bus notification to update UI
-                    try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                            'id': self.id,
-                            'message': posted_message.message_format()[0]
-                        })
-                        _logger.info(f"Bus notification sent for message {posted_message.id}")
-                    except Exception as bus_error:
-                        _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
-
-        except Exception as e:
-            _logger.error(f"Error getting final AI response after tool execution: {e}")
-            # Post error message
-            ai_bot = self.env['res.partner'].sudo().search([
-                ('name', '=', 'AI Assistant Bot')
-            ], limit=1)
-
-            if ai_bot:
-                error_message = f"I executed the tools but encountered an error getting the final response: {str(e)}"
-                formatted_error = self._format_ai_message_body(error_message)
+            if current_content:
+                # Format body with graph if available
+                formatted_body = self._format_ai_message_body(current_content, graph_data=graph_data)
                 posted_message = self.message_post(
-                    body=formatted_error,
+                    body=formatted_body,
                     author_id=ai_bot.id,
                     message_type='comment',
                     subtype_xmlid='mail.mt_comment'
                 )
-                _logger.info(f"Posted error message {posted_message.id} to channel {self.id}")
+                _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations")
 
                 # Flush to ensure message is saved before sending notification
                 self.env.flush_all()
@@ -621,6 +661,6 @@ Use tools when needed to provide accurate, data-driven responses."""
                         'id': self.id,
                         'message': posted_message.message_format()[0]
                     })
-                    _logger.info(f"Bus notification sent for error message {posted_message.id}")
+                    _logger.info(f"Bus notification sent for message {posted_message.id}")
                 except Exception as bus_error:
-                    _logger.error(f"Failed to send bus notification for error: {bus_error}", exc_info=True)
+                    _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
