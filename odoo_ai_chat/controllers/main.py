@@ -490,7 +490,7 @@ Only use a different language if the user explicitly requests it.
                 return {'error': 'Invalid session'}
 
             messages = []
-            for m in session.message_ids.sorted('create_date'):
+            for m in session.chat_message_ids.sorted('create_date'):
                 # Skip tool result messages - they're technical implementation details
                 if m.role == 'tool':
                     continue
