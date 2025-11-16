@@ -47,8 +47,8 @@
                         </group>
                     </group>
                     <notebook>
-                        <page string="Messages">
-                            <field name="message_ids">
+                        <page string="Chat Messages">
+                            <field name="chat_message_ids">
                                 <tree>
                                     <field name="role"/>
                                     <field name="content"/>

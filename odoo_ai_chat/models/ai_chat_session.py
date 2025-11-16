@@ -32,10 +32,10 @@ class AIChatSession(models.Model):
         ondelete='set null'
     )
 
-    message_ids = fields.One2many(
+    chat_message_ids = fields.One2many(
         'ai.chat.message',
         'session_id',
-        string='Messages'
+        string='Chat Messages'
     )
 
     message_count = fields.Integer(
@@ -55,17 +55,17 @@ class AIChatSession(models.Model):
         default=True
     )
 
-    @api.depends('message_ids')
+    @api.depends('chat_message_ids')
     def _compute_message_count(self):
         for session in self:
-            session.message_count = len(session.message_ids)
+            session.message_count = len(session.chat_message_ids)
 
-    @api.depends('message_ids.create_date')
+    @api.depends('chat_message_ids.create_date')
     def _compute_last_message_date(self):
         for session in self:
-            if session.message_ids:
+            if session.chat_message_ids:
                 session.last_message_date = max(
-                    session.message_ids.mapped('create_date')
+                    session.chat_message_ids.mapped('create_date')
                 )
             else:
                 session.last_message_date = False
@@ -126,7 +126,7 @@ class AIChatSession(models.Model):
         self.channel_id = channel
 
         # Sync existing messages to the channel
-        for msg in self.message_ids.filtered(lambda m: m.role in ('user', 'assistant')):
+        for msg in self.chat_message_ids.filtered(lambda m: m.role in ('user', 'assistant')):
             author = self.env.user.partner_id if msg.role == 'user' else ai_bot
             channel.message_post(
                 body=msg.content,
@@ -184,7 +184,7 @@ class AIChatSession(models.Model):
         tool_call_ids_with_responses = set()
         tool_call_ids_requested = set()
 
-        for msg in self.message_ids:
+        for msg in self.chat_message_ids:
             if msg.role == 'tool' and msg.tool_call_id:
                 tool_call_ids_with_responses.add(msg.tool_call_id)
             elif msg.role == 'assistant' and msg.tool_calls:
@@ -196,7 +196,7 @@ class AIChatSession(models.Model):
                 except (json.JSONDecodeError, KeyError):
                     pass
 
-        for msg in self.message_ids.sorted('create_date'):
+        for msg in self.chat_message_ids.sorted('create_date'):
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
                 _logger.warning(f"Skipping tool message {msg.id} without tool_call_id")
