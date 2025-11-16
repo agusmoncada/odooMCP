@@ -500,6 +500,20 @@ USER CONTEXT:
 - Timezone: {user.tz}
 - Company: {user.company_id.name if user.company_id else 'N/A'}
 
+WHEN CONTEXT IS UNCLEAR - ASK FOR CLARIFICATION:
+- If a request is ambiguous or lacks necessary details, ASK clarifying questions BEFORE taking action
+- Examples of when to ask:
+  * "Create a quotation" → Ask: "For which customer? What products or services should I include?"
+  * "Update this record" (in group chat) → Ask: "Which record are you referring to?"
+  * "Change the status" → Ask: "Which record? What status should I set?"
+  * Vague references like "this", "that", "it" without clear context → Ask for specifics
+- In GROUP CHATS especially, be extra careful about context:
+  * Messages may reference previous conversations you haven't seen
+  * Multiple people may be discussing different topics
+  * "This quotation" without a specific ID or clear reference → Ask which one
+- NEVER guess or assume what the user wants - it's better to ask than to make a mistake
+- Be concise in your questions - one or two specific questions max
+
 CRITICAL INSTRUCTIONS FOR TOOL USAGE:
 - You MUST complete ALL parts of multi-step tasks before providing a final response
 - If a user asks you to create multiple records (e.g., customer + project + stages), you MUST call create_record for EACH item
@@ -590,6 +604,24 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             if not old_messages:
                 # Nothing to summarize
+                return messages
+
+            # CRITICAL: Clean recent_messages to avoid orphaned tool sequences
+            # Remove orphaned tool messages from start (tool without preceding assistant)
+            while recent_messages and recent_messages[0].get('role') == 'tool':
+                _logger.info(f"Removing orphaned tool message from start of recent messages")
+                # Move this orphaned tool message to old_messages so it gets summarized
+                old_messages.append(recent_messages.pop(0))
+
+            # Remove incomplete tool sequences from end (assistant with tool_calls but no results)
+            if recent_messages and recent_messages[-1].get('role') == 'assistant' and recent_messages[-1].get('tool_calls'):
+                _logger.info(f"Removing incomplete assistant+tool_calls from end of recent messages")
+                # Move back to old_messages
+                old_messages.append(recent_messages.pop())
+
+            # If we removed too much, just return original messages
+            if not recent_messages:
+                _logger.warning("Recent messages became empty after cleanup, returning original")
                 return messages
 
             # Create a summarization prompt
