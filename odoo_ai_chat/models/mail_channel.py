@@ -78,7 +78,9 @@ class MailChannel(models.Model):
         # Only process if message is from user, not from AI bot
         # Also skip if AI bot not found to prevent errors
         if ai_bot and message.author_id.id != ai_bot.id:
-            _logger.info(f"Processing AI message from user, starting async thread")
+            import time
+            start_time = time.time()
+            _logger.info(f"[TIMING] Message received at {start_time}, starting async thread")
             # Get message content before starting thread (avoid cursor issues)
             message_body = message.body or ''
             _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_body_length={len(message_body)}")
@@ -86,11 +88,12 @@ class MailChannel(models.Model):
             # Use threading to process in background with a new cursor
             thread = threading.Thread(
                 target=self._process_ai_message_async,
-                args=(self.env.cr.dbname, self.env.uid, self.id, message_body)
+                args=(self.env.cr.dbname, self.env.uid, self.id, message_body, start_time)
             )
             thread.daemon = True
             thread.start()
-            _logger.info(f"Async thread started successfully")
+            thread_start_time = time.time()
+            _logger.info(f"[TIMING] Async thread started at {thread_start_time}, thread start delay: {thread_start_time - start_time:.3f}s")
 
         return message
 
@@ -120,8 +123,12 @@ class MailChannel(models.Model):
 
         return html_content
 
-    def _process_ai_message_async(self, dbname, uid, channel_id, message_body):
+    def _process_ai_message_async(self, dbname, uid, channel_id, message_body, start_time=None):
         """Process AI message asynchronously in a separate thread with new cursor"""
+        import time
+        async_start = time.time()
+        if start_time:
+            _logger.info(f"[TIMING] Async method started, delay from message_post: {async_start - start_time:.3f}s")
         _logger.info(f"[ASYNC] Starting async processing for channel {channel_id}")
 
         max_retries = 3
@@ -144,6 +151,11 @@ class MailChannel(models.Model):
 
                     # Commit the transaction
                     cr.commit()
+                    end_time = time.time()
+                    total_time = end_time - async_start
+                    if start_time:
+                        total_from_message = end_time - start_time
+                        _logger.info(f"[TIMING] Total processing time: {total_time:.2f}s, Total from message_post: {total_from_message:.2f}s")
                     _logger.info(f"[ASYNC] Processing complete and committed on attempt {attempt + 1}")
                     break  # Success! Exit the retry loop
 
@@ -197,17 +209,12 @@ class MailChannel(models.Model):
                         subtype_xmlid='mail.mt_comment'
                     )
 
-                    # Manually trigger bus notification to update UI
-                    try:
-                        env['bus.bus']._sendone(channel, 'mail.channel/new_message', {
-                            'id': channel.id,
-                            'message': posted_message.message_format()[0]
-                        })
-                    except Exception:
-                        pass  # Bus notification is optional
-
+                    # Commit first, then Odoo will automatically send bus notifications
                     cr.commit()
-                    _logger.info(f"[ASYNC] Error message posted successfully")
+                    _logger.info(f"[ASYNC] Error message posted and committed successfully")
+
+                    # NOTE: Removed manual bus notification - it was being sent before commit,
+                    # causing race condition where Discuss couldn't fetch the message yet
         except Exception as post_error:
             _logger.exception(f"[ASYNC] Failed to post error message: {post_error}")
 
@@ -307,6 +314,12 @@ class MailChannel(models.Model):
 
             # Get messages for API
             messages = session.get_messages_for_api()
+
+            # Truncate conversation history if too long to prevent API errors
+            # Keep last 15 messages (reasonable context window)
+            if len(messages) > 15:
+                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
+                messages = messages[-15:]
 
             # Add system prompt
             messages.insert(0, {
@@ -414,18 +427,8 @@ class MailChannel(models.Model):
                         )
                         _logger.info(f"Posted AI message {posted_message.id} to channel {self.id}")
 
-                        # Flush to ensure message is saved before sending notification
-                        self.env.flush_all()
-
-                        # Manually trigger bus notification to update UI
-                        try:
-                            self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                                'id': self.id,
-                                'message': posted_message.message_format()[0]
-                            })
-                            _logger.info(f"Bus notification sent for message {posted_message.id}")
-                        except Exception as bus_error:
-                            _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
+                        # NOTE: Removed manual bus notification - Odoo's message_post() automatically
+                        # sends bus notifications when committing. See note in tool call path for details.
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -473,14 +476,7 @@ class MailChannel(models.Model):
                         subtype_xmlid='mail.mt_comment'
                     )
 
-                    # Manually trigger bus notification to update UI
-                    try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                            'id': self.id,
-                            'message': posted_message.message_format()[0]
-                        })
-                    except Exception:
-                        pass  # Bus notification is optional
+                    # NOTE: Removed manual bus notification - Odoo handles this automatically on commit
             except Exception as post_error:
                 # If even posting the error fails, just log it
                 _logger.error(f"Failed to post error message to channel: {post_error}")
@@ -588,7 +584,19 @@ Remember: Execute ALL required tool calls before providing a final text response
         if tools:
             payload["tools"] = tools
 
+        # Log request details for debugging
+        _logger.info(f"OpenRouter API call: {len(messages)} messages, tools={'yes' if tools else 'no'}")
+
         response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+        # Better error handling - log response body on error
+        if not response.ok:
+            try:
+                error_body = response.json()
+                _logger.error(f"OpenRouter API error ({response.status_code}): {error_body}")
+            except Exception:
+                _logger.error(f"OpenRouter API error ({response.status_code}): {response.text}")
+
         response.raise_for_status()
 
         return response.json()
@@ -715,6 +723,12 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             # Get updated messages including tool results
             messages = session.get_messages_for_api()
+
+            # Truncate conversation history if too long
+            if len(messages) > 15:
+                _logger.warning(f"Conversation too long ({len(messages)} messages), truncating to last 15")
+                messages = messages[-15:]
+
             messages.insert(0, {
                 'role': 'system',
                 'content': system_prompt
@@ -809,15 +823,7 @@ Remember: Execute ALL required tool calls before providing a final text response
                 )
                 _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations")
 
-                # Flush to ensure message is saved before sending notification
-                self.env.flush_all()
-
-                # Manually trigger bus notification to update UI
-                try:
-                    self.env['bus.bus']._sendone(self, 'mail.channel/new_message', {
-                        'id': self.id,
-                        'message': posted_message.message_format()[0]
-                    })
-                    _logger.info(f"Bus notification sent for message {posted_message.id}")
-                except Exception as bus_error:
-                    _logger.error(f"Failed to send bus notification: {bus_error}", exc_info=True)
+                # NOTE: Removed manual bus notification - Odoo's message_post() automatically
+                # sends bus notifications when committing. Our manual notification was being
+                # sent BEFORE the transaction was committed, causing a race condition where
+                # Discuss received the notification but couldn't fetch the message yet.
