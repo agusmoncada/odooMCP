@@ -139,9 +139,21 @@ class MailChannel(models.Model):
                 # Process the AI message
                 channel._process_ai_message(message_body)
 
-                # Commit the transaction
-                cr.commit()
-                _logger.info(f"[ASYNC] Processing complete and committed")
+                # Commit the transaction with retry on serialization failure
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        cr.commit()
+                        _logger.info(f"[ASYNC] Processing complete and committed")
+                        break
+                    except Exception as commit_error:
+                        if 'could not serialize access' in str(commit_error) and attempt < max_retries - 1:
+                            _logger.warning(f"[ASYNC] Serialization error on attempt {attempt + 1}, retrying...")
+                            import time
+                            time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                            cr.rollback()
+                        else:
+                            raise
 
         except Exception as e:
             _logger.exception(f"[ASYNC] Error in async AI message processing: {e}")
@@ -228,8 +240,21 @@ class MailChannel(models.Model):
             mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
             if mcp_enabled:
                 try:
-                    mcp_server = self.env['mcp.server'].sudo()
-                    tools = mcp_server.get_tools()
+                    mcp_server = self.env['mcp.server.registry'].sudo()
+                    mcp_tools = mcp_server.list_tools()
+
+                    # Convert MCP tools to OpenRouter/OpenAI format
+                    tools = []
+                    for tool in mcp_tools:
+                        tools.append({
+                            'type': 'function',
+                            'function': {
+                                'name': tool['name'],
+                                'description': tool['description'],
+                                'parameters': tool.get('inputSchema', {})
+                            }
+                        })
+                    _logger.info(f"Loaded {len(tools)} MCP tools")
                 except Exception as e:
                     _logger.warning(f"Could not load MCP tools: {e}")
 
@@ -395,7 +420,7 @@ Use tools when needed to provide accurate, data-driven responses."""
         })
 
         # Execute tools and create tool response messages
-        mcp_server = self.env['mcp.server'].sudo()
+        mcp_server = self.env['mcp.server.registry'].sudo()
         graph_data = None  # Track graph data if generated
 
         for tc in tool_calls:
