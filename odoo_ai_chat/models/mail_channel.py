@@ -77,14 +77,32 @@ class MailChannel(models.Model):
             return message
 
         # Check if AI should respond in this channel:
-        # 1. AI bot is a member of this channel (DM or group chat), OR
-        # 2. Message @mentions the AI bot, OR
-        # 3. Channel is explicitly marked as AI channel (backward compatibility)
+        # 1. Channel is explicitly marked as AI channel (backward compatibility) - always respond
+        # 2. 1-on-1 chat with AI (only 2 members) - always respond
+        # 3. Group chat (3+ members) - ONLY respond when @mentioned
+        # This prevents AI from responding to every message in group chats and overloading the system
+
         ai_is_member = ai_bot.id in self.channel_partner_ids.ids
         ai_is_mentioned = ai_bot.id in message.partner_ids.ids
-        should_respond = ai_is_member or ai_is_mentioned or self.is_ai_channel
+        member_count = len(self.channel_partner_ids)
+        is_direct_message = member_count == 2 and ai_is_member  # 1-on-1 chat with AI
+        is_group_chat = member_count >= 3
 
-        _logger.info(f"message_post on channel {self.id} ({self.name}): ai_member={ai_is_member}, ai_mentioned={ai_is_mentioned}, is_ai_channel={self.is_ai_channel}, should_respond={should_respond}")
+        # Decision logic:
+        # - is_ai_channel: Always respond (backward compatibility for dedicated AI channels)
+        # - Direct message: Always respond (1-on-1 with AI)
+        # - Group chat: Only respond when @mentioned
+        if self.is_ai_channel:
+            should_respond = True
+        elif is_direct_message:
+            should_respond = True
+        elif is_group_chat:
+            should_respond = ai_is_mentioned
+        else:
+            # Fallback: only respond if @mentioned
+            should_respond = ai_is_mentioned
+
+        _logger.info(f"message_post on channel {self.id} ({self.name}): members={member_count}, ai_member={ai_is_member}, ai_mentioned={ai_is_mentioned}, is_ai_channel={self.is_ai_channel}, is_dm={is_direct_message}, is_group={is_group_chat}, should_respond={should_respond}")
 
         if should_respond:
             import time
@@ -482,6 +500,20 @@ USER CONTEXT:
 - Timezone: {user.tz}
 - Company: {user.company_id.name if user.company_id else 'N/A'}
 
+WHEN CONTEXT IS UNCLEAR - ASK FOR CLARIFICATION:
+- If a request is ambiguous or lacks necessary details, ASK clarifying questions BEFORE taking action
+- Examples of when to ask:
+  * "Create a quotation" → Ask: "For which customer? What products or services should I include?"
+  * "Update this record" (in group chat) → Ask: "Which record are you referring to?"
+  * "Change the status" → Ask: "Which record? What status should I set?"
+  * Vague references like "this", "that", "it" without clear context → Ask for specifics
+- In GROUP CHATS especially, be extra careful about context:
+  * Messages may reference previous conversations you haven't seen
+  * Multiple people may be discussing different topics
+  * "This quotation" without a specific ID or clear reference → Ask which one
+- NEVER guess or assume what the user wants - it's better to ask than to make a mistake
+- Be concise in your questions - one or two specific questions max
+
 CRITICAL INSTRUCTIONS FOR TOOL USAGE:
 - You MUST complete ALL parts of multi-step tasks before providing a final response
 - If a user asks you to create multiple records (e.g., customer + project + stages), you MUST call create_record for EACH item
@@ -572,6 +604,24 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             if not old_messages:
                 # Nothing to summarize
+                return messages
+
+            # CRITICAL: Clean recent_messages to avoid orphaned tool sequences
+            # Remove orphaned tool messages from start (tool without preceding assistant)
+            while recent_messages and recent_messages[0].get('role') == 'tool':
+                _logger.info(f"Removing orphaned tool message from start of recent messages")
+                # Move this orphaned tool message to old_messages so it gets summarized
+                old_messages.append(recent_messages.pop(0))
+
+            # Remove incomplete tool sequences from end (assistant with tool_calls but no results)
+            if recent_messages and recent_messages[-1].get('role') == 'assistant' and recent_messages[-1].get('tool_calls'):
+                _logger.info(f"Removing incomplete assistant+tool_calls from end of recent messages")
+                # Move back to old_messages
+                old_messages.append(recent_messages.pop())
+
+            # If we removed too much, just return original messages
+            if not recent_messages:
+                _logger.warning("Recent messages became empty after cleanup, returning original")
                 return messages
 
             # Create a summarization prompt
