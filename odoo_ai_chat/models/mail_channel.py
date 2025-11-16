@@ -109,8 +109,8 @@ class MailChannel(models.Model):
 
             # Get AI configuration
             config_params = self.env['ir.config_parameter'].sudo()
-            openrouter_api_key = config_params.get_param('openrouter_api_key')
-            openrouter_model = config_params.get_param('openrouter_model', 'openai/gpt-3.5-turbo')
+            openrouter_api_key = config_params.get_param('odoo_ai_chat.openrouter_api_key')
+            openrouter_model = config_params.get_param('odoo_ai_chat.openrouter_model', 'openai/gpt-3.5-turbo')
 
             if not openrouter_api_key:
                 raise ValueError("OpenRouter API key not configured")
@@ -129,7 +129,7 @@ class MailChannel(models.Model):
 
             # Get MCP tools if enabled
             tools = None
-            mcp_enabled = config_params.get_param('mcp_tools_enabled', 'True') == 'True'
+            mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
             if mcp_enabled:
                 try:
                     mcp_server = self.env['mcp.server'].sudo()
@@ -196,7 +196,7 @@ class MailChannel(models.Model):
     def _build_context_aware_prompt(self):
         """Build context-aware system prompt"""
         config_params = self.env['ir.config_parameter'].sudo()
-        base_prompt = config_params.get_param('ai_system_prompt', 'You are a helpful AI assistant integrated with Odoo.')
+        base_prompt = config_params.get_param('odoo_ai_chat.system_prompt', 'You are a helpful AI assistant integrated with Odoo.')
 
         # Get user context
         user = self.env.user
