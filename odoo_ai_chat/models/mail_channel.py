@@ -245,7 +245,10 @@ class MailChannel(models.Model):
                     self.env.cr.execute('SAVEPOINT thinking_message')
                     try:
                         thinking_body = self._format_ai_message_body("🤔 AI is thinking...")
-                        thinking_message = self.with_context(mail_create_nosubscribe=True).message_post(
+                        thinking_message = self.with_context(
+                            mail_create_nosubscribe=True,
+                            mail_channel_noautofollow=True
+                        ).message_post(
                             body=thinking_body,
                             author_id=ai_bot.id,
                             message_type='comment',
@@ -841,7 +844,13 @@ Remember: Execute ALL required tool calls before providing a final text response
             if current_content:
                 # Format body with graph if available
                 formatted_body = self._format_ai_message_body(current_content, graph_data=graph_data)
-                posted_message = self.message_post(
+
+                # Use context to prevent auto-updating channel member (seen/fetched fields)
+                # This avoids concurrent update conflicts with user UI actions
+                posted_message = self.with_context(
+                    mail_create_nosubscribe=True,
+                    mail_channel_noautofollow=True
+                ).message_post(
                     body=formatted_body,
                     author_id=ai_bot.id,
                     message_type='comment',
