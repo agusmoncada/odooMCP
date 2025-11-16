@@ -34,6 +34,27 @@ class MCPServer:
         self._prompts = {}
         self._initialize_tools()
 
+    def _sanitize_for_json(self, data):
+        """Convert non-JSON-serializable types to JSON-safe formats"""
+        from datetime import datetime, date, time
+        from decimal import Decimal
+
+        if isinstance(data, dict):
+            return {key: self._sanitize_for_json(value) for key, value in data.items()}
+        elif isinstance(data, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in data]
+        elif isinstance(data, (datetime, date, time)):
+            return data.isoformat()
+        elif isinstance(data, Decimal):
+            return float(data)
+        elif isinstance(data, bytes):
+            return data.decode('utf-8', errors='ignore')
+        elif hasattr(data, '__iter__') and not isinstance(data, (str, bytes)):
+            # Handle other iterables (like Odoo recordsets)
+            return [self._sanitize_for_json(item) for item in data]
+        else:
+            return data
+
     def _initialize_tools(self):
         """Initialize available MCP tools"""
         self._tools = {
@@ -255,7 +276,7 @@ class MCPServer:
             return {
                 'success': True,
                 'count': len(data),
-                'records': data
+                'records': self._sanitize_for_json(data)
             }
         except KeyError as e:
             return {
@@ -281,7 +302,7 @@ class MCPServer:
 
             return {
                 'success': True,
-                'record': data
+                'record': self._sanitize_for_json(data)
             }
         except KeyError as e:
             return {
@@ -300,7 +321,7 @@ class MCPServer:
             return {
                 'success': True,
                 'record_id': record.id,
-                'record': record.read()[0]
+                'record': self._sanitize_for_json(record.read()[0])
             }
         except KeyError as e:
             # Model doesn't exist - likely module not installed
@@ -324,7 +345,7 @@ class MCPServer:
 
             return {
                 'success': True,
-                'record': record.read()[0]
+                'record': self._sanitize_for_json(record.read()[0])
             }
         except KeyError as e:
             return {
