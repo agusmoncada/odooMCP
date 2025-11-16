@@ -419,14 +419,16 @@ class MCPServer:
 
             # Process data based on graph type and grouping
             # Use pure Python implementation (lightweight, no dependencies)
+            # Generate title if not provided
+            if not title:
+                title = self._generate_title(model, y_field, group_by, aggregation)
+
             result = self._process_graph_data(
-                data, graph_type, x_field, y_field, group_by, aggregation, limit
+                data, graph_type, x_field, y_field, group_by, aggregation, limit, title
             )
 
             # Add metadata
-            result['graph_data']['title'] = title or self._generate_title(
-                model, y_field, group_by, aggregation
-            )
+            result['graph_data']['title'] = title
             result['graph_data']['record_count'] = len(records)
 
             return result
@@ -437,7 +439,7 @@ class MCPServer:
 
     def _process_graph_data(self, data: List[Dict], graph_type: str,
                             x_field: str, y_field: str, group_by: str,
-                            aggregation: str, limit: int) -> Dict:
+                            aggregation: str, limit: int, title: str) -> Dict:
         """Process graph data using pure Python (lightweight, no dependencies)"""
         # Simple implementation without pandas
         if group_by:
@@ -490,7 +492,7 @@ class MCPServer:
             values = [value]
 
         # Generate actual image for embedding in Discuss
-        image_base64 = self._render_graph_image(graph_type, labels, values, title or y_field)
+        image_base64 = self._render_graph_image(graph_type, labels, values, title)
 
         return {
             'success': True,
