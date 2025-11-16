@@ -5,3 +5,4 @@ from . import mcp_server
 from . import pdf_processor
 from . import mail_channel
 from . import res_users
+from . import res_partner

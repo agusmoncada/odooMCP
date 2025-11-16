@@ -106,10 +106,14 @@ class AIChatSession(models.Model):
                 'is_company': False,
                 'type': 'contact',
                 'image_1920': image_data,
+                'im_status': 'online',  # Always show as online/connected
             })
-        elif image_data and not bot.image_1920:
-            # Update existing bot with image if it doesn't have one
-            bot.sudo().write({'image_1920': image_data})
+        else:
+            # Update existing bot with image if needed and ensure it's always online
+            update_vals = {'im_status': 'online'}
+            if image_data and not bot.image_1920:
+                update_vals['image_1920'] = image_data
+            bot.sudo().write(update_vals)
 
         return bot
 
