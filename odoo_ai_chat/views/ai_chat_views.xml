@@ -152,11 +152,8 @@
         <field name="target">current</field>
     </record>
 
-    <!-- Delete old server action if it exists -->
-    <delete model="ir.actions.server" id="action_open_ai_discuss_channel" search="[]"/>
-
     <!-- URL Action to Open AI Discuss Channel -->
-    <record id="action_open_ai_discuss_channel" model="ir.actions.act_url">
+    <record id="action_open_ai_discuss_channel_url" model="ir.actions.act_url">
         <field name="name">AI Assistant (Discuss)</field>
         <field name="url">/ai_chat/open_discuss_channel</field>
         <field name="target">self</field>
@@ -172,7 +169,7 @@
     <menuitem id="menu_ai_chat_discuss"
               name="AI Assistant (Discuss)"
               parent="menu_ai_chat_root"
-              action="action_open_ai_discuss_channel"
+              action="action_open_ai_discuss_channel_url"
               sequence="5"/>
 
     <menuitem id="menu_ai_chat_sessions"
