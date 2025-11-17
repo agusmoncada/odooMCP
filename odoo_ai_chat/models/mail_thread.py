@@ -82,24 +82,11 @@ class MailThread(models.AbstractModel):
                     _logger.error("AI bot not found")
                     return
 
-                # Post thinking message
-                thinking_message = None
-                try:
-                    thinking_body = "🤔 AI is thinking..."
-                    thinking_message = record.with_context(
-                        mail_create_nosubscribe=True,
-                        mail_channel_noautofollow=True
-                    ).message_post(
-                        body=thinking_body,
-                        author_id=ai_bot.id,
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_comment'
-                        # Don't use parent_id here - original message may not be committed yet
-                    )
-                    env.cr.commit()
-                    _logger.info(f"Posted thinking message to {model_name}({record_id})")
-                except Exception as e:
-                    _logger.warning(f"Could not post thinking message: {e}")
+                # Get the original message to find who mentioned us
+                original_message = env['mail.message'].browse(original_message_id)
+                mentioning_user_partner = None
+                if original_message.exists() and original_message.author_id:
+                    mentioning_user_partner = original_message.author_id
 
                 # Get AI configuration
                 config_params = env['ir.config_parameter'].sudo()
@@ -240,15 +227,16 @@ class MailThread(models.AbstractModel):
                         if not response_content:
                             response_content = f"I completed {iteration} operations but reached the maximum number of steps allowed. Some tasks may be incomplete. Please let me know if you'd like me to continue."
 
-                # Delete thinking message
-                if thinking_message:
-                    try:
-                        thinking_message.unlink()
-                    except Exception as e:
-                        _logger.warning(f"Could not delete thinking message: {e}")
-
-                # Post AI response
+                # Post AI response with @ mention
                 if response_content:
+                    # Add @ mention if we know who mentioned us
+                    partner_ids = []
+                    if mentioning_user_partner:
+                        partner_ids = [mentioning_user_partner.id]
+                        # Format response with @ mention using Odoo's chatter mention format
+                        mention_html = f'<a href="#" class="o_mail_redirect" data-oe-id="{mentioning_user_partner.id}" data-oe-model="res.partner">@{mentioning_user_partner.name}</a> '
+                        response_content = mention_html + response_content
+
                     record.with_context(
                         mail_create_nosubscribe=True,
                         mail_channel_noautofollow=True
@@ -257,7 +245,8 @@ class MailThread(models.AbstractModel):
                         author_id=ai_bot.id,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',
-                        parent_id=original_message_id  # Reply to the @mention
+                        parent_id=original_message_id,  # Reply to the @mention
+                        partner_ids=partner_ids  # Notify the user who mentioned us
                     )
                     env.cr.commit()
                     _logger.info(f"Posted AI response to {model_name}({record_id}) after {iteration} iterations")
@@ -302,25 +291,26 @@ INSTRUCTIONS:
 - If you encounter errors (missing required fields, etc.), explain clearly what happened and suggest alternatives
 
 CREATING REMINDERS/ACTIVITIES:
-- To create reminders, use project.task model (simpler, fewer required fields)
-- DO NOT use mail.activity directly - it requires activity_type_id which is complex to set up
-- Example: create_record(model='project.task', values={{'name': 'Call client', 'date_deadline': '2025-11-23', 'user_id': {user.id}}})
+- To create reminders, use the mail.activity model
+- Link activities to the current record using res_id and res_model
+- Required fields: activity_type_id (use 1 for generic TODO, 2 for Call, 3 for Meeting), res_id, res_model, summary
+- Example: create_record(model='mail.activity', values={{'activity_type_id': 2, 'res_id': {record.id}, 'res_model': '{model_name}', 'summary': 'Call client', 'date_deadline': '2025-11-23', 'user_id': {user.id}}})
 
 EXAMPLE 1 - Update Status:
 User: "@ai mark this as confirmed"
 You should:
 1. Call write_record(model='{model_name}', record_id={record.id}, values={{'state': 'sale'}})
-2. Respond: "✅ I've confirmed this quotation. It's now a sales order."
+2. Respond: "@User ✅ I've confirmed this quotation. It's now a sales order."
 
 EXAMPLE 2 - Create Reminder:
 User: "@ai remind me to call this client tomorrow"
 You should:
-1. Call create_record(model='project.task', values={{'name': 'Call {record_name}', 'date_deadline': 'tomorrow', 'user_id': {user.id}}})
-2. Respond: "✅ I've created a task to remind you to call this client tomorrow."
+1. Call create_record(model='mail.activity', values={{'activity_type_id': 2, 'res_id': {record.id}, 'res_model': '{model_name}', 'summary': 'Call {record_name}', 'date_deadline': 'tomorrow', 'user_id': {user.id}}})
+2. Respond: "@User ✅ I've created an activity to remind you to call this client tomorrow."
 
 Available tools:
 - search_records: Query Odoo data
-- create_record: Create new records (use project.task for reminders)
+- create_record: Create new records (use mail.activity for reminders)
 - write_record: Update records (use this to update THIS record)
 - generate_graph: Create visualizations
 
