@@ -17,16 +17,11 @@ export class AIChatSystrayItem extends Component {
     }
 
     /**
-     * Open AI Chat Widget
+     * Open AI Chat in Discuss
      */
     async openChat() {
-        // Open the AI chat in a dialog (allows seeing Odoo behind it)
-        this.action.doAction({
-            type: "ir.actions.client",
-            tag: "ai_chat_widget",
-            name: "AI Chat Assistant",
-            target: "new",
-        });
+        // Redirect to controller that opens or creates the AI Assistant channel in Discuss
+        window.location.href = '/ai_chat/open_discuss_channel';
     }
 }
 
