@@ -27,6 +27,12 @@ class MailChannel(models.Model):
         help='Linked AI chat session for this channel'
     )
 
+    # View context tracking - stores the current page/record the user is viewing
+    current_view_context = fields.Text(
+        string='Current View Context',
+        help='JSON string storing the current view context (model, record ID, etc.)'
+    )
+
     def _send_typing_notification(self, is_typing, ai_bot=None):
         """
         Helper method to send typing notifications to all channel members
@@ -569,7 +575,116 @@ WRONG behavior:
 
 Remember: Execute ALL required tool calls before providing a final text response."""
 
+        # Add current view context if available
+        view_context_section = self._get_view_context_section()
+        if view_context_section:
+            prompt += f"\n\n{view_context_section}"
+
         return prompt
+
+    def update_view_context(self, context_data):
+        """Update the current view context for this channel
+
+        Args:
+            context_data: Dict containing view context (model, active_id, etc.)
+        """
+        try:
+            self.current_view_context = json.dumps(context_data)
+            _logger.info(f"[AI Chat] Updated view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
+        except Exception as e:
+            _logger.error(f"[AI Chat] Failed to update view context: {e}")
+
+    def _get_view_context_section(self):
+        """Build the view context section for the AI prompt
+
+        Returns:
+            String with formatted view context information, or None if no context
+        """
+        if not self.current_view_context:
+            return None
+
+        try:
+            context = json.loads(self.current_view_context)
+
+            # Check if context is recent (within last 5 minutes)
+            # This prevents using stale context from old page views
+            import time
+            timestamp = context.get('timestamp', 0)
+            if timestamp and (time.time() * 1000 - timestamp) > 300000:  # 5 minutes
+                _logger.debug("[AI Chat] View context is stale, ignoring")
+                return None
+
+            model = context.get('model')
+            active_id = context.get('active_id')
+
+            if not model or not active_id:
+                return None
+
+            # Try to fetch the record data
+            try:
+                record = self.env[model].browse(active_id)
+                if not record.exists():
+                    return None
+
+                # Get display name
+                display_name = record.display_name if hasattr(record, 'display_name') else str(active_id)
+
+                # Build context section
+                context_text = f"""
+CURRENT PAGE CONTEXT:
+The user is currently viewing a record. When they refer to "this", "this record", "this client", "this order", etc., they mean:
+- Model: {model}
+- Record ID: {active_id}
+- Record Name: {display_name}
+- View Type: {context.get('view_type', 'unknown')}
+"""
+
+                # Add key fields based on model
+                if model == 'sale.order':
+                    context_text += f"""- Customer: {record.partner_id.name if record.partner_id else 'N/A'}
+- Order Reference: {record.name if record.name else 'N/A'}
+- Amount Total: {record.amount_total if hasattr(record, 'amount_total') else 'N/A'}
+- Status: {dict(record._fields['state']._description_selection(self.env)).get(record.state, record.state) if hasattr(record, 'state') else 'N/A'}
+"""
+                elif model == 'res.partner':
+                    context_text += f"""- Partner Name: {record.name if record.name else 'N/A'}
+- Email: {record.email if record.email else 'N/A'}
+- Phone: {record.phone if record.phone else 'N/A'}
+- Is Company: {'Yes' if record.is_company else 'No'}
+"""
+                elif model == 'account.move':
+                    context_text += f"""- Invoice Number: {record.name if record.name else 'N/A'}
+- Customer: {record.partner_id.name if record.partner_id else 'N/A'}
+- Amount Total: {record.amount_total if hasattr(record, 'amount_total') else 'N/A'}
+- Status: {dict(record._fields['state']._description_selection(self.env)).get(record.state, record.state) if hasattr(record, 'state') else 'N/A'}
+"""
+                elif model == 'project.project':
+                    context_text += f"""- Project Name: {record.name if record.name else 'N/A'}
+- Partner: {record.partner_id.name if record.partner_id else 'N/A'}
+"""
+                elif model == 'crm.lead':
+                    context_text += f"""- Opportunity Name: {record.name if record.name else 'N/A'}
+- Customer: {record.partner_id.name if record.partner_id else 'N/A'}
+- Expected Revenue: {record.expected_revenue if hasattr(record, 'expected_revenue') else 'N/A'}
+- Stage: {record.stage_id.name if record.stage_id else 'N/A'}
+"""
+
+                context_text += """
+When the user asks about "this client", "this order", "remind me to call this client", or similar context-dependent queries, use the record information above.
+You can use the search_records, write_record, or other tools with the model and ID above to access or modify this record."""
+
+                return context_text
+
+            except Exception as e:
+                _logger.error(f"[AI Chat] Error fetching record data for context: {e}")
+                return None
+
+        except json.JSONDecodeError:
+            _logger.error("[AI Chat] Invalid JSON in current_view_context")
+            return None
+        except Exception as e:
+            _logger.error(f"[AI Chat] Error building view context section: {e}")
+            return None
 
     def _summarize_conversation(self, messages, api_key, model):
         """Summarize older messages when conversation gets too long
