@@ -215,6 +215,44 @@ class MCPServer:
                     },
                     'required': ['invoice_data']
                 }
+            },
+            'read_group': {
+                'name': 'read_group',
+                'description': 'Aggregate and group records from an Odoo model. Use this for: summing values by category, counting records by field, getting totals grouped by product/partner/date, calculating averages per group. Perfect for "sum by product", "total by customer", "count by status", etc.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'model': {'type': 'string', 'description': 'The Odoo model name (e.g., sale.order.line, account.move.line)'},
+                        'domain': {
+                            'type': 'array',
+                            'items': {},
+                            'description': 'Search domain to filter records (e.g., [["state", "=", "draft"]])',
+                            'default': []
+                        },
+                        'fields': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to aggregate. Use "field:sum", "field:avg", "field:count", etc. Example: ["price_subtotal:sum", "product_uom_qty:sum"]',
+                            'default': []
+                        },
+                        'groupby': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to group by (e.g., ["product_id"], ["partner_id", "state"])'
+                        },
+                        'orderby': {
+                            'type': 'string',
+                            'description': 'Order specification (e.g., "price_subtotal DESC")',
+                            'default': ''
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'description': 'Maximum number of groups to return',
+                            'default': 80
+                        }
+                    },
+                    'required': ['model', 'groupby']
+                }
             }
         }
 
@@ -239,6 +277,8 @@ class MCPServer:
                 return self._generate_graph(**arguments)
             elif tool_name == 'create_vendor_bill_from_pdf':
                 return self._create_vendor_bill_from_pdf(**arguments)
+            elif tool_name == 'read_group':
+                return self._read_group(**arguments)
             else:
                 return {'error': f'Unknown tool: {tool_name}'}
         except Exception as e:
@@ -372,6 +412,65 @@ class MCPServer:
                 'error': f"Model '{model}' not found. The required module may not be installed."
             }
         except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _read_group(self, model: str, groupby: List[str], domain: List = None,
+                    fields: List[str] = None, orderby: str = '', limit: int = 80) -> Dict:
+        """Aggregate and group records from an Odoo model"""
+        try:
+            import json
+            Model = self.env[model]
+            domain = domain or []
+            fields = fields or []
+
+            # Handle domain as string (AI sometimes sends JSON strings)
+            if isinstance(domain, str):
+                try:
+                    domain = json.loads(domain)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid domain format: {domain}'}
+
+            # Handle fields as string
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid fields format: {fields}'}
+
+            # Handle groupby as string
+            if isinstance(groupby, str):
+                try:
+                    groupby = json.loads(groupby)
+                except json.JSONDecodeError:
+                    # Try treating it as a single field name
+                    groupby = [groupby]
+
+            # Ensure groupby is a list
+            if not isinstance(groupby, list):
+                groupby = [groupby]
+
+            # Call Odoo's read_group method
+            result = Model.read_group(
+                domain=domain,
+                fields=fields,
+                groupby=groupby,
+                orderby=orderby if orderby else False,
+                limit=limit if limit else None,
+                lazy=False  # Get all groupby levels at once
+            )
+
+            return {
+                'success': True,
+                'count': len(result),
+                'groups': self._sanitize_for_json(result)
+            }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
+            }
+        except Exception as e:
+            _logger.exception(f"Error in read_group for model {model}")
             return {'success': False, 'error': str(e)}
 
     def _generate_graph(self, graph_type: str, model: str, y_field: str,
