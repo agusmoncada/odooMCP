@@ -988,7 +988,15 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                     self.env.cr.execute(f'SAVEPOINT {savepoint_name}')
 
                     try:
-                        result = mcp_server.call_tool(tool_name, tool_args)
+                        # Pass current view context to tool execution for context-aware operations
+                        view_context = None
+                        if self.current_view_context:
+                            try:
+                                view_context = json.loads(self.current_view_context)
+                            except Exception:
+                                pass
+
+                        result = mcp_server.call_tool(tool_name, tool_args, view_context=view_context)
 
                         # Extract graph data if this was a generate_graph call
                         if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
