@@ -695,7 +695,7 @@ Only use a different language if the user explicitly requests it.
             return request.redirect('/web')
 
     @http.route('/ai_chat/update_channel_context', type='json', auth='user')
-    def update_channel_context(self, context, **kwargs):
+    def update_channel_context(self, context=None, **kwargs):
         """Update the AI channel's current view context
 
         This endpoint is called by the frontend when the user navigates to a new page/record.
@@ -713,7 +713,8 @@ Only use a different language if the user explicitly requests it.
             channel = session_model.get_or_create_ai_channel_for_user()
 
             # Update the channel's view context
-            channel.update_view_context(context)
+            if context:
+                channel.update_view_context(context)
 
             return {'success': True}
 
