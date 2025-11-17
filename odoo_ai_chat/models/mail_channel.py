@@ -305,7 +305,6 @@ class MailChannel(models.Model):
         Args:
             user_message_body: String content of the user's message
         """
-        thinking_message = None
         try:
             # Get AI bot
             ai_bot = self.env['res.partner'].sudo().search([
@@ -410,8 +409,7 @@ class MailChannel(models.Model):
                         openrouter_api_key,
                         openrouter_model,
                         system_prompt,
-                        tools,
-                        thinking_message  # Pass thinking message to be deleted later
+                        tools
                     )
                 else:
                     _logger.info(f"AI response has no tool calls, posting directly to channel")
@@ -421,24 +419,6 @@ class MailChannel(models.Model):
                         'role': 'assistant',
                         'content': content,
                     })
-
-                    # Delete thinking message before posting real response
-                    if thinking_message:
-                        try:
-                            self.env.cr.execute('SAVEPOINT delete_thinking')
-                            try:
-                                # thinking_message is now an ID, need to browse it
-                                msg_to_delete = self.env['mail.message'].browse(thinking_message)
-                                if msg_to_delete.exists():
-                                    msg_to_delete.unlink()
-                                    _logger.info(f"Deleted thinking message {thinking_message}")
-                                self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
-                            except Exception as e:
-                                _logger.warning(f"Could not delete thinking message: {e}")
-                                self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking')
-                                self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
-                        except Exception:
-                            pass  # Savepoint itself failed, just continue
 
                     # Post AI response to channel
                     ai_bot = self.env['res.partner'].sudo().search([
@@ -463,27 +443,6 @@ class MailChannel(models.Model):
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
-            # Delete thinking message on error
-            if thinking_message:
-                try:
-                    self.env.cr.execute('SAVEPOINT delete_thinking_error')
-                    try:
-                        # thinking_message is now an ID, need to browse it
-                        msg_to_delete = self.env['mail.message'].browse(thinking_message)
-                        if msg_to_delete.exists():
-                            msg_to_delete.unlink()
-                            _logger.info(f"Deleted thinking message due to error")
-                        self.env.cr.execute('RELEASE SAVEPOINT delete_thinking_error')
-                    except Exception as del_error:
-                        _logger.warning(f"Could not delete thinking message on error: {del_error}")
-                        try:
-                            self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking_error')
-                            self.env.cr.execute('RELEASE SAVEPOINT delete_thinking_error')
-                        except Exception:
-                            pass  # Transaction may already be aborted
-                except Exception:
-                    pass  # Savepoint itself failed, just continue
-
             # Post error message to channel with AI bot as author to prevent recursion
             try:
                 ai_bot = self.env['res.partner'].sudo().search([
@@ -810,7 +769,7 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
         return response.json()
 
-    def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools, thinking_message=None):
+    def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
         """Process tool calls from AI and get final response
 
         This method implements a loop that allows the AI to make multiple rounds of tool calls
@@ -818,9 +777,6 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         - Creating customer + project + stages + tags
         - Searching for data, then updating multiple records based on results
         - Any workflow that requires sequential tool execution
-
-        Args:
-            thinking_message: The "AI is thinking..." message to delete before posting final response
         """
         _logger.info(f"Processing {len(tool_calls)} tool calls")
 
@@ -1008,24 +964,6 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 'role': 'assistant',
                 'content': current_content,
             })
-
-        # Delete thinking message before posting real response
-        if thinking_message:
-            try:
-                self.env.cr.execute('SAVEPOINT delete_thinking')
-                try:
-                    # thinking_message is now an ID, need to browse it
-                    msg_to_delete = self.env['mail.message'].browse(thinking_message)
-                    if msg_to_delete.exists():
-                        msg_to_delete.unlink()
-                        _logger.info(f"Deleted thinking message before posting final response")
-                    self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
-                except Exception as e:
-                    _logger.warning(f"Could not delete thinking message: {e}")
-                    self.env.cr.execute('ROLLBACK TO SAVEPOINT delete_thinking')
-                    self.env.cr.execute('RELEASE SAVEPOINT delete_thinking')
-            except Exception:
-                pass  # Savepoint itself failed, just continue
 
         # Post final response to channel
         ai_bot = self.env['res.partner'].sudo().search([

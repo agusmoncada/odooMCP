@@ -79,13 +79,24 @@ const typingIndicatorService = {
         });
 
         /**
-         * Show typing indicator in the Discuss UI
+         * Show typing indicator in the Discuss UI (NOT in Chatter)
          */
         function showTypingIndicator(channelId, partnerId) {
             // Find the message list container for this channel
             const messageList = document.querySelector('.o_mail_thread');
 
             if (messageList) {
+                // Check if we're in Chatter (form view) vs Discuss (messaging app)
+                // Don't show typing indicator in Chatter - only in Discuss
+                const isInChatter = messageList.closest('.o-mail-Chatter') ||
+                                   messageList.closest('.o_Message_threadPane') ||
+                                   messageList.closest('.o_form_view');
+
+                if (isInChatter) {
+                    console.log("[AI Chat] Skipping typing indicator - in Chatter, not Discuss");
+                    return;
+                }
+
                 // Remove any existing typing indicator
                 const existingIndicator = messageList.querySelector('.o_ai_typing_indicator');
                 if (existingIndicator) {
