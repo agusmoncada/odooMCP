@@ -8,20 +8,21 @@ import { registry } from "@web/core/registry";
  */
 
 const discussContextUpdaterService = {
-    dependencies: ["ai_chat_context_tracker", "orm", "rpc"],
+    dependencies: ["ai_chat_context_tracker", "orm", "rpc", "bus_service"],
 
-    start(env, { ai_chat_context_tracker, orm, rpc }) {
+    start(env, { ai_chat_context_tracker, orm, rpc, bus_service }) {
         console.log("[AI Chat] Discuss context updater service started");
 
         let lastContext = null;
         let updateTimer = null;
+        let currentAiChannelId = null;
 
         /**
          * Update the AI channel's context when the view changes
          */
-        async function updateAiChannelContext() {
+        async function updateAiChannelContext(forceUpdate = false) {
             try {
-                console.log("[AI Chat] updateAiChannelContext called");
+                console.log("[AI Chat] updateAiChannelContext called, forceUpdate:", forceUpdate);
                 const currentContext = ai_chat_context_tracker.getCurrentContext();
 
                 console.log("[AI Chat] Current context from tracker:", currentContext);
@@ -48,7 +49,7 @@ const discussContextUpdaterService = {
 
                 console.log("[AI Chat] Context keys - current:", contextKey, "last:", lastContextKey);
 
-                if (contextKey === lastContextKey) {
+                if (!forceUpdate && contextKey === lastContextKey) {
                     console.log("[AI Chat] Context unchanged, skipping update");
                     return;
                 }
@@ -78,21 +79,42 @@ const discussContextUpdaterService = {
         /**
          * Schedule a context update (debounced)
          */
-        function scheduleContextUpdate() {
+        function scheduleContextUpdate(forceUpdate = false) {
             if (updateTimer) {
                 clearTimeout(updateTimer);
             }
 
             // Wait 500ms before updating to avoid too many updates
             updateTimer = setTimeout(() => {
-                updateAiChannelContext();
+                updateAiChannelContext(forceUpdate);
             }, 500);
         }
+
+        // Listen for when AI channel is opened/created
+        // When a new AI chat is opened, force send the current context
+        bus_service.addEventListener("notification", ({ detail: notifications }) => {
+            for (const notif of notifications) {
+                // Check if this is a channel-related notification
+                if (notif.type === "mail.channel/joined" ||
+                    notif.type === "mail.channel/new_message" ||
+                    notif.type === "mail.channel/last_interest_dt_changed") {
+                    const channelId = notif.payload?.id || notif.payload?.channel_id;
+
+                    // If the AI channel ID changed, force update the context
+                    if (channelId && channelId !== currentAiChannelId) {
+                        console.log("[AI Chat] AI channel changed from", currentAiChannelId, "to", channelId, "- forcing context update");
+                        currentAiChannelId = channelId;
+                        // Force send context for new channel
+                        scheduleContextUpdate(true);
+                    }
+                }
+            }
+        });
 
         // Listen for action changes
         // We'll use a MutationObserver to detect when the URL changes
         const observer = new MutationObserver(() => {
-            scheduleContextUpdate();
+            scheduleContextUpdate(false);
         });
 
         // Observe the document body for changes
@@ -103,11 +125,11 @@ const discussContextUpdaterService = {
 
         // Also check periodically (every 3 seconds) to catch any missed updates
         setInterval(() => {
-            scheduleContextUpdate();
+            scheduleContextUpdate(false);
         }, 3000);
 
-        // Initial update
-        scheduleContextUpdate();
+        // Initial update - force it to ensure first context is sent
+        scheduleContextUpdate(true);
 
         return {
             updateContext: updateAiChannelContext,
