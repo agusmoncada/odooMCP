@@ -12,6 +12,8 @@ export class AIChatSystrayItem extends Component {
     setup() {
         this.aiChat = useService("ai_chat");
         this.action = useService("action");
+        // Ensure typing indicator service starts (for Discuss AI chat)
+        useService("ai_chat_typing_indicator");
     }
 
     /**
