@@ -428,6 +428,16 @@ class MailChannel(models.Model):
                         self.env.cr.commit()
                         _logger.info(f"Posted AI message {posted_message.id} to channel {self.id} and committed")
 
+                        # CRITICAL: Send bus notification manually
+                        # In async threads, Odoo's automatic notifications don't work
+                        # We need to manually notify the frontend about the new message
+                        try:
+                            self._broadcast([posted_message.id])
+                            self.env.cr.commit()  # Commit the bus notification
+                            _logger.info(f"Sent bus notification for message {posted_message.id}")
+                        except Exception as bus_error:
+                            _logger.warning(f"Could not send bus notification: {bus_error}")
+
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
             # Delete thinking message on error
@@ -1035,5 +1045,13 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 # Commit immediately so message appears in UI without delay
                 self.env.cr.commit()
                 _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations and committed")
-                # sent BEFORE the transaction was committed, causing a race condition where
-                # Discuss received the notification but couldn't fetch the message yet.
+
+                # CRITICAL: Send bus notification manually
+                # In async threads, Odoo's automatic notifications don't work
+                # We need to manually notify the frontend about the new message
+                try:
+                    self._broadcast([posted_message.id])
+                    self.env.cr.commit()  # Commit the bus notification
+                    _logger.info(f"Sent bus notification for message {posted_message.id}")
+                except Exception as bus_error:
+                    _logger.warning(f"Could not send bus notification: {bus_error}")
