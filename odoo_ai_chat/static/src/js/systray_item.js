@@ -11,6 +11,7 @@ import { useService } from "@web/core/utils/hooks";
 export class AIChatSystrayItem extends Component {
     setup() {
         this.rpc = useService("rpc");
+        this.action = useService("action");
         this.messaging = useService("messaging");
         // Ensure typing indicator service starts (for Discuss AI chat)
         useService("ai_chat_typing_indicator");
@@ -21,25 +22,44 @@ export class AIChatSystrayItem extends Component {
      */
     async openChat() {
         try {
+            console.log("[AI Chat] Opening AI chat...");
+
             // Get or create the AI channel
             const result = await this.rpc("/ai_chat/get_channel_id", {});
+            console.log("[AI Chat] Channel result:", result);
 
             if (result.success && result.channel_id) {
-                // Wait for messaging to be ready
-                await this.messaging.isReady;
+                console.log("[AI Chat] Opening channel", result.channel_id);
 
-                // Get the thread (channel) from the messaging store
-                const messaging = this.messaging.get();
-                const thread = messaging.store.Thread.insert({
-                    id: result.channel_id,
-                    model: 'mail.channel',
+                // Open the channel as a chat window at the bottom by setting its fold state
+                await this.rpc("/web/dataset/call_kw/mail.channel/channel_fold", {
+                    model: "mail.channel",
+                    method: "channel_fold",
+                    args: [[result.channel_id]],
+                    kwargs: {
+                        state: "open"
+                    }
                 });
 
-                // Open the chat window at the bottom
-                thread.open();
+                console.log("[AI Chat] Channel folded to open state");
+
+                // Trigger a bus notification to refresh the messaging menu
+                // This will make the chat window appear at the bottom
+                try {
+                    await this.messaging.isReady;
+                    const messaging = await this.messaging.get();
+
+                    // Force refresh of the messaging menu to show the chat window
+                    if (messaging && messaging.refresh) {
+                        await messaging.refresh();
+                    }
+                } catch (e) {
+                    console.log("[AI Chat] Could not refresh messaging:", e.message);
+                }
             }
         } catch (error) {
-            console.error("Error opening AI chat:", error);
+            console.error("[AI Chat] Error opening AI chat:", error);
+            console.error("[AI Chat] Error stack:", error.stack);
         }
     }
 }
