@@ -609,7 +609,7 @@ Remember: Execute ALL required tool calls before providing a final text response
             _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
 
             # Verify it was saved by refreshing and reading again
-            self.refresh(['current_view_context'])
+            self.refresh()
             saved_context = self.current_view_context
             _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
             
@@ -631,8 +631,8 @@ Remember: Execute ALL required tool calls before providing a final text response
             String with formatted view context information, or None if no context
         """
         # Refresh the record to get latest context in case of transaction isolation
-        self.invalidate_cache(['current_view_context'])
-        self.refresh(['current_view_context'])
+        self.env.invalidate_all()
+        self.refresh()
         
         if not self.current_view_context:
             _logger.info(f"[AI Chat] No view context stored for channel {self.id}")

@@ -728,12 +728,18 @@ Only use a different language if the user explicitly requests it.
         try:
             _logger.info(f"[AI Chat Controller] update_channel_context endpoint called")
             _logger.info(f"[AI Chat Controller] User: {request.env.user.name} (ID: {request.env.uid})")
+            _logger.info(f"[AI Chat Controller] Raw request.jsonrequest: {getattr(request, 'jsonrequest', 'No jsonrequest')}")
             _logger.info(f"[AI Chat Controller] Raw kwargs received: {kwargs}")
             _logger.info(f"[AI Chat Controller] Context parameter: {context}")
             _logger.info(f"[AI Chat Controller] Context type: {type(context)}")
             
+            # If we have context, log its details, otherwise check if it's in kwargs
             if context:
                 _logger.info(f"[AI Chat Controller] Context details: model={context.get('model')}, active_id={context.get('active_id')}")
+            elif 'context' in kwargs:
+                _logger.info(f"[AI Chat Controller] Context found in kwargs: {kwargs['context']}")
+            else:
+                _logger.warning(f"[AI Chat Controller] No context found in parameters or kwargs")
 
             # Get or create AI channel for this user
             session_model = request.env['ai.chat.session']

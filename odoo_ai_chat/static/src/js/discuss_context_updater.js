@@ -73,16 +73,24 @@ const discussContextUpdaterService = {
 
                 // Find the AI channel for the current user
                 // We'll call a backend method to update the context
-                const result = await rpc("/ai_chat/update_channel_context", {
-                    context: contextForBackend,
-                });
-
-                console.log("[AI Chat] Update result:", result);
-
-                if (result.success) {
-                    console.log("[AI Chat] AI channel context updated successfully");
-                } else {
-                    console.error("[AI Chat] Failed to update context:", result.error);
+                console.log("[AI Chat] About to call RPC with context:", contextForBackend);
+                
+                let result;
+                try {
+                    result = await rpc("/ai_chat/update_channel_context", {
+                        context: contextForBackend,
+                    });
+                    
+                    console.log("[AI Chat] RPC call successful, result:", result);
+                    
+                    if (result.success) {
+                        console.log("[AI Chat] AI channel context updated successfully");
+                    } else {
+                        console.error("[AI Chat] Failed to update context:", result.error);
+                    }
+                } catch (error) {
+                    console.error("[AI Chat] RPC call failed:", error);
+                    throw error;
                 }
             } catch (error) {
                 console.error("[AI Chat] Could not update AI channel context:", error);
