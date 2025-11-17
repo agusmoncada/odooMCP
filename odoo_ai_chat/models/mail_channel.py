@@ -589,10 +589,21 @@ Remember: Execute ALL required tool calls before providing a final text response
             context_data: Dict containing view context (model, active_id, etc.)
         """
         try:
+            _logger.info(f"[AI Chat] update_view_context called for channel {self.id} ({self.name})")
+            _logger.info(f"[AI Chat] Context data received: {context_data}")
+
             self.current_view_context = json.dumps(context_data)
-            _logger.info(f"[AI Chat] Updated view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
+
+            # Force write to database
+            self.env.cr.commit()
+
+            _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
+
+            # Verify it was saved
+            saved_context = self.current_view_context
+            _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
         except Exception as e:
-            _logger.error(f"[AI Chat] Failed to update view context: {e}")
+            _logger.error(f"[AI Chat] Failed to update view context: {e}", exc_info=True)
 
     def _get_view_context_section(self):
         """Build the view context section for the AI prompt
