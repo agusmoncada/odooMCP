@@ -708,13 +708,20 @@ Only use a different language if the user explicitly requests it.
             Dict with success status
         """
         try:
+            _logger.info(f"[AI Chat] update_channel_context called with context: {context}")
+
             # Get or create AI channel for this user
             session_model = request.env['ai.chat.session']
             channel = session_model.get_or_create_ai_channel_for_user()
 
+            _logger.info(f"[AI Chat] Got AI channel: {channel.id} ({channel.name})")
+
             # Update the channel's view context
             if context:
                 channel.update_view_context(context)
+                _logger.info(f"[AI Chat] Context updated successfully for channel {channel.id}")
+            else:
+                _logger.warning("[AI Chat] update_channel_context called with no context data")
 
             return {'success': True}
 

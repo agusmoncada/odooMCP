@@ -601,23 +601,34 @@ Remember: Execute ALL required tool calls before providing a final text response
             String with formatted view context information, or None if no context
         """
         if not self.current_view_context:
+            _logger.info("[AI Chat] No view context stored for channel")
             return None
 
         try:
             context = json.loads(self.current_view_context)
+            _logger.info(f"[AI Chat] View context loaded: {context}")
 
             # Check if context is recent (within last 5 minutes)
             # This prevents using stale context from old page views
             import time
             timestamp = context.get('timestamp', 0)
-            if timestamp and (time.time() * 1000 - timestamp) > 300000:  # 5 minutes
-                _logger.debug("[AI Chat] View context is stale, ignoring")
+            current_time_ms = time.time() * 1000
+            age_ms = current_time_ms - timestamp if timestamp else 999999
+            age_seconds = age_ms / 1000
+
+            _logger.info(f"[AI Chat] Context age: {age_seconds:.1f} seconds (timestamp: {timestamp}, current: {current_time_ms:.0f})")
+
+            if timestamp and age_ms > 300000:  # 5 minutes
+                _logger.info(f"[AI Chat] View context is stale ({age_seconds:.1f}s old), ignoring")
                 return None
 
             model = context.get('model')
             active_id = context.get('active_id')
 
+            _logger.info(f"[AI Chat] Building context section for model={model}, active_id={active_id}")
+
             if not model or not active_id:
+                _logger.info("[AI Chat] Missing model or active_id in context")
                 return None
 
             # Try to fetch the record data
@@ -631,13 +642,28 @@ Remember: Execute ALL required tool calls before providing a final text response
 
                 # Build context section
                 context_text = f"""
-CURRENT PAGE CONTEXT:
-The user is currently viewing a record. When they refer to "this", "this record", "this client", "this order", etc., they mean:
-- Model: {model}
-- Record ID: {active_id}
-- Record Name: {display_name}
-- View Type: {context.get('view_type', 'unknown')}
-"""
+═══════════════════════════════════════════════════════════════════
+🎯 IMPORTANT: USER'S CURRENT LOCATION
+═══════════════════════════════════════════════════════════════════
+The user is currently viewing a specific record in Odoo.
+
+When the user says:
+- "this record", "this", "it"
+- "this customer", "this client", "this partner"
+- "this order", "this quotation", "this sale"
+- "remind me to call this client"
+- "create a task for this"
+- ANY reference without specifying a specific name/ID
+
+They are referring to THIS RECORD:
+┌─────────────────────────────────────────────────────────────────┐
+│ Model: {model}
+│ Record ID: {active_id}
+│ Record Name: {display_name}
+│ View Type: {context.get('view_type', 'unknown')}
+└─────────────────────────────────────────────────────────────────┘
+
+KEY DETAILS:"""
 
                 # Add key fields based on model
                 if model == 'sale.order':
@@ -670,9 +696,23 @@ The user is currently viewing a record. When they refer to "this", "this record"
 """
 
                 context_text += """
-When the user asks about "this client", "this order", "remind me to call this client", or similar context-dependent queries, use the record information above.
-You can use the search_records, write_record, or other tools with the model and ID above to access or modify this record."""
+═══════════════════════════════════════════════════════════════════
+📋 HOW TO USE THIS CONTEXT:
+═══════════════════════════════════════════════════════════════════
+1. When user says "this client/customer/partner" → Use the partner information above
+2. When user says "remind me to call this client" → Create task/reminder related to THIS record
+3. When user says "create a quotation for this customer" → Use THIS customer's ID
+4. When user references "this" without specifics → Use the Record ID and Model above
 
+You can use tools like:
+- search_records({model}, [('id', '=', {active_id})]) to fetch this record
+- write_record({model}, {active_id}, {{'field': 'value'}}) to update this record
+- create_record('project.task', {{'name': 'Call client', 'partner_id': partner_id}}) to create related records
+
+⚠️ CRITICAL: Do NOT ignore this context! The user is asking about THIS specific record!
+═══════════════════════════════════════════════════════════════════"""
+
+                _logger.info(f"[AI Chat] Context section built successfully ({len(context_text)} chars)")
                 return context_text
 
             except Exception as e:
