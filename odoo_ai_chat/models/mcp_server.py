@@ -34,6 +34,27 @@ class MCPServer:
         self._prompts = {}
         self._initialize_tools()
 
+    def _sanitize_for_json(self, data):
+        """Convert non-JSON-serializable types to JSON-safe formats"""
+        from datetime import datetime, date, time
+        from decimal import Decimal
+
+        if isinstance(data, dict):
+            return {key: self._sanitize_for_json(value) for key, value in data.items()}
+        elif isinstance(data, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in data]
+        elif isinstance(data, (datetime, date, time)):
+            return data.isoformat()
+        elif isinstance(data, Decimal):
+            return float(data)
+        elif isinstance(data, bytes):
+            return data.decode('utf-8', errors='ignore')
+        elif hasattr(data, '__iter__') and not isinstance(data, (str, bytes)):
+            # Handle other iterables (like Odoo recordsets)
+            return [self._sanitize_for_json(item) for item in data]
+        else:
+            return data
+
     def _initialize_tools(self):
         """Initialize available MCP tools"""
         self._tools = {
@@ -194,6 +215,44 @@ class MCPServer:
                     },
                     'required': ['invoice_data']
                 }
+            },
+            'read_group': {
+                'name': 'read_group',
+                'description': 'Aggregate and group records from an Odoo model. Use this for: summing values by category, counting records by field, getting totals grouped by product/partner/date, calculating averages per group. Perfect for "sum by product", "total by customer", "count by status", etc.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'model': {'type': 'string', 'description': 'The Odoo model name (e.g., sale.order.line, account.move.line)'},
+                        'domain': {
+                            'type': 'array',
+                            'items': {},
+                            'description': 'Search domain to filter records (e.g., [["state", "=", "draft"]])',
+                            'default': []
+                        },
+                        'fields': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to aggregate. Use "field:sum", "field:avg", "field:count", etc. Example: ["price_subtotal:sum", "product_uom_qty:sum"]',
+                            'default': []
+                        },
+                        'groupby': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Fields to group by (e.g., ["product_id"], ["partner_id", "state"])'
+                        },
+                        'orderby': {
+                            'type': 'string',
+                            'description': 'Order specification (e.g., "price_subtotal DESC")',
+                            'default': ''
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'description': 'Maximum number of groups to return',
+                            'default': 80
+                        }
+                    },
+                    'required': ['model', 'groupby']
+                }
             }
         }
 
@@ -218,6 +277,8 @@ class MCPServer:
                 return self._generate_graph(**arguments)
             elif tool_name == 'create_vendor_bill_from_pdf':
                 return self._create_vendor_bill_from_pdf(**arguments)
+            elif tool_name == 'read_group':
+                return self._read_group(**arguments)
             else:
                 return {'error': f'Unknown tool: {tool_name}'}
         except Exception as e:
@@ -227,8 +288,24 @@ class MCPServer:
     def _search_records(self, model: str, domain: List = None, fields: List = None, limit: int = 10) -> Dict:
         """Search for records in a model"""
         try:
+            import json
             Model = self.env[model]
             domain = domain or []
+
+            # Handle domain as string (AI sometimes sends JSON strings)
+            if isinstance(domain, str):
+                try:
+                    domain = json.loads(domain)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid domain format: {domain}'}
+
+            # Handle fields as string
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid fields format: {fields}'}
+
             records = Model.search(domain, limit=limit)
 
             if fields:
@@ -239,7 +316,7 @@ class MCPServer:
             return {
                 'success': True,
                 'count': len(data),
-                'records': data
+                'records': self._sanitize_for_json(data)
             }
         except KeyError as e:
             return {
@@ -265,7 +342,7 @@ class MCPServer:
 
             return {
                 'success': True,
-                'record': data
+                'record': self._sanitize_for_json(data)
             }
         except KeyError as e:
             return {
@@ -279,12 +356,25 @@ class MCPServer:
         """Create a new record"""
         try:
             Model = self.env[model]
+
+            # Special handling for mail.activity - need to convert res_model to res_model_id
+            if model == 'mail.activity' and 'res_model' in values and 'res_model_id' not in values:
+                res_model_name = values.get('res_model')
+                ir_model = self.env['ir.model'].sudo().search([('model', '=', res_model_name)], limit=1)
+                if ir_model:
+                    values['res_model_id'] = ir_model.id
+                else:
+                    return {
+                        'success': False,
+                        'error': f"Model '{res_model_name}' not found in ir.model. Cannot create activity."
+                    }
+
             record = Model.create(values)
 
             return {
                 'success': True,
                 'record_id': record.id,
-                'record': record.read()[0]
+                'record': self._sanitize_for_json(record.read()[0])
             }
         except KeyError as e:
             # Model doesn't exist - likely module not installed
@@ -308,7 +398,7 @@ class MCPServer:
 
             return {
                 'success': True,
-                'record': record.read()[0]
+                'record': self._sanitize_for_json(record.read()[0])
             }
         except KeyError as e:
             return {
@@ -335,6 +425,65 @@ class MCPServer:
                 'error': f"Model '{model}' not found. The required module may not be installed."
             }
         except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _read_group(self, model: str, groupby: List[str], domain: List = None,
+                    fields: List[str] = None, orderby: str = '', limit: int = 80) -> Dict:
+        """Aggregate and group records from an Odoo model"""
+        try:
+            import json
+            Model = self.env[model]
+            domain = domain or []
+            fields = fields or []
+
+            # Handle domain as string (AI sometimes sends JSON strings)
+            if isinstance(domain, str):
+                try:
+                    domain = json.loads(domain)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid domain format: {domain}'}
+
+            # Handle fields as string
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except json.JSONDecodeError:
+                    return {'success': False, 'error': f'Invalid fields format: {fields}'}
+
+            # Handle groupby as string
+            if isinstance(groupby, str):
+                try:
+                    groupby = json.loads(groupby)
+                except json.JSONDecodeError:
+                    # Try treating it as a single field name
+                    groupby = [groupby]
+
+            # Ensure groupby is a list
+            if not isinstance(groupby, list):
+                groupby = [groupby]
+
+            # Call Odoo's read_group method
+            result = Model.read_group(
+                domain=domain,
+                fields=fields,
+                groupby=groupby,
+                orderby=orderby if orderby else False,
+                limit=limit if limit else None,
+                lazy=False  # Get all groupby levels at once
+            )
+
+            return {
+                'success': True,
+                'count': len(result),
+                'groups': self._sanitize_for_json(result)
+            }
+        except KeyError as e:
+            return {
+                'success': False,
+                'error': f"Model '{model}' not found. The required module may not be installed."
+            }
+        except Exception as e:
+            _logger.exception(f"Error in read_group for model {model}")
             return {'success': False, 'error': str(e)}
 
     def _generate_graph(self, graph_type: str, model: str, y_field: str,
@@ -382,14 +531,16 @@ class MCPServer:
 
             # Process data based on graph type and grouping
             # Use pure Python implementation (lightweight, no dependencies)
+            # Generate title if not provided
+            if not title:
+                title = self._generate_title(model, y_field, group_by, aggregation)
+
             result = self._process_graph_data(
-                data, graph_type, x_field, y_field, group_by, aggregation, limit
+                data, graph_type, x_field, y_field, group_by, aggregation, limit, title
             )
 
             # Add metadata
-            result['graph_data']['title'] = title or self._generate_title(
-                model, y_field, group_by, aggregation
-            )
+            result['graph_data']['title'] = title
             result['graph_data']['record_count'] = len(records)
 
             return result
@@ -400,7 +551,7 @@ class MCPServer:
 
     def _process_graph_data(self, data: List[Dict], graph_type: str,
                             x_field: str, y_field: str, group_by: str,
-                            aggregation: str, limit: int) -> Dict:
+                            aggregation: str, limit: int, title: str) -> Dict:
         """Process graph data using pure Python (lightweight, no dependencies)"""
         # Simple implementation without pandas
         if group_by:
@@ -452,8 +603,12 @@ class MCPServer:
             labels = ['Total']
             values = [value]
 
+        # Generate actual image for embedding in Discuss
+        image_base64 = self._render_graph_image(graph_type, labels, values, title)
+
         return {
             'success': True,
+            'image_base64': image_base64,
             'graph_data': {
                 'type': graph_type,
                 'labels': labels,
@@ -463,6 +618,52 @@ class MCPServer:
                 }]
             }
         }
+
+    def _render_graph_image(self, graph_type: str, labels: List, values: List, title: str) -> str:
+        """Render graph as base64 encoded image"""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import matplotlib.pyplot as plt
+            import base64
+            from io import BytesIO
+
+            # Create figure
+            fig, ax = plt.subplots(figsize=(10, 6))
+
+            if graph_type == 'bar':
+                ax.bar(range(len(labels)), values, color='#875A7B')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+            elif graph_type == 'line':
+                ax.plot(range(len(labels)), values, marker='o', color='#875A7B', linewidth=2)
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+            elif graph_type == 'pie':
+                ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
+            else:  # default to bar
+                ax.bar(range(len(labels)), values, color='#875A7B')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            plt.tight_layout()
+
+            # Convert to base64
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+            plt.close(fig)
+
+            return image_base64
+
+        except ImportError:
+            _logger.warning("matplotlib not available, graphs will not be rendered")
+            return None
+        except Exception as e:
+            _logger.error(f"Error rendering graph: {e}", exc_info=True)
+            return None
 
     def _format_label(self, label) -> str:
         """Format a label for display"""

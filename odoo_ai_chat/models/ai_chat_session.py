@@ -1,6 +1,8 @@
 """AI Chat Session Model"""
 
 from odoo import api, fields, models
+import base64
+import os
 
 
 class AIChatSession(models.Model):
@@ -8,6 +10,7 @@ class AIChatSession(models.Model):
 
     _name = 'ai.chat.session'
     _description = 'AI Chat Session'
+    _inherit = ['mail.thread']
     _order = 'create_date desc'
 
     name = fields.Char(
@@ -24,10 +27,17 @@ class AIChatSession(models.Model):
         ondelete='cascade'
     )
 
-    message_ids = fields.One2many(
+    channel_id = fields.Many2one(
+        'mail.channel',
+        string='Discuss Channel',
+        help='Linked Discuss channel for this session',
+        ondelete='set null'
+    )
+
+    chat_message_ids = fields.One2many(
         'ai.chat.message',
         'session_id',
-        string='Messages'
+        string='Chat Messages'
     )
 
     message_count = fields.Integer(
@@ -47,17 +57,17 @@ class AIChatSession(models.Model):
         default=True
     )
 
-    @api.depends('message_ids')
+    @api.depends('chat_message_ids')
     def _compute_message_count(self):
         for session in self:
-            session.message_count = len(session.message_ids)
+            session.message_count = len(session.chat_message_ids)
 
-    @api.depends('message_ids.create_date')
+    @api.depends('chat_message_ids.create_date')
     def _compute_last_message_date(self):
         for session in self:
-            if session.message_ids:
+            if session.chat_message_ids:
                 session.last_message_date = max(
-                    session.message_ids.mapped('create_date')
+                    session.chat_message_ids.mapped('create_date')
                 )
             else:
                 session.last_message_date = False
@@ -70,6 +80,168 @@ class AIChatSession(models.Model):
         """Unarchive this chat session"""
         self.write({'active': True})
 
+    def _get_ai_bot_partner(self):
+        """Get or create AI bot partner with user account
+
+        The AI bot needs a user account to:
+        - Appear in Discuss contacts
+        - Be added to group chats
+        - Participate in conversations
+
+        The bot appears as a contact in Discuss that you can:
+        - Start 1-on-1 chats with
+        - Add to group conversations
+        - @mention in any channel
+        """
+        # Check if AI user already exists
+        ai_user = self.env['res.users'].sudo().search([
+            ('login', '=', 'ai.assistant@odoo.local')
+        ], limit=1)
+
+        # Read AI icon from module's static folder
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'static', 'description', 'icon.png'
+        )
+
+        image_data = False
+        if os.path.exists(icon_path):
+            with open(icon_path, 'rb') as icon_file:
+                image_data = base64.b64encode(icon_file.read())
+
+        if not ai_user:
+            # Check for old partner-only bot (migration from previous version)
+            old_partner_bot = self.env['res.partner'].sudo().search([
+                ('email', '=', 'ai.assistant@odoo.local'),
+                ('user_ids', '=', False)  # Partner without user
+            ], limit=1)
+
+            # Create AI user (this automatically creates the partner or links to existing one)
+            # Use internal user to avoid portal limitations
+            create_vals = {
+                'name': 'AI Assistant',
+                'login': 'ai.assistant@odoo.local',
+                'email': 'ai.assistant@odoo.local',
+                'active': True,
+                'image_1920': image_data,
+                'notification_type': 'inbox',
+                'odoobot_state': 'disabled',  # Disable OdooBot tips
+                # Use minimal groups to avoid consuming license
+                'groups_id': [(6, 0, [
+                    self.env.ref('base.group_user').id,  # Internal user (needed for Discuss)
+                ])],
+            }
+
+            # If old partner exists, link to it instead of creating new partner
+            if old_partner_bot:
+                create_vals['partner_id'] = old_partner_bot.id
+
+            ai_user = self.env['res.users'].sudo().create(create_vals)
+
+            # Update partner with additional info
+            ai_user.partner_id.sudo().write({
+                'im_status': 'online',
+                'type': 'contact',
+                'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
+            })
+        else:
+            # Update existing user's partner
+            update_vals = {
+                'name': 'AI Assistant',
+                'im_status': 'online',
+                'active': True,
+                'comment': 'AI Assistant - Ask me anything about your Odoo data! You can DM me, add me to groups, or @mention me.',
+            }
+            if image_data and not ai_user.partner_id.image_1920:
+                update_vals['image_1920'] = image_data
+            ai_user.partner_id.sudo().write(update_vals)
+
+        return ai_user.partner_id
+
+    def action_create_discuss_channel(self):
+        """Create or link to a Discuss channel"""
+        self.ensure_one()
+
+        if self.channel_id:
+            # Channel already exists, just open it
+            return {
+                'type': 'ir.actions.act_window',
+                'res_model': 'mail.channel',
+                'res_id': self.channel_id.id,
+                'view_mode': 'form',
+                'target': 'current',
+            }
+
+        # Create new AI channel
+        ai_bot = self._get_ai_bot_partner()
+
+        channel = self.env['mail.channel'].create({
+            'name': f'AI Assistant: {self.name}',
+            'description': f'AI chat session linked to {self.name}',
+            'channel_type': 'chat',
+            'channel_partner_ids': [
+                (4, self.env.user.partner_id.id),
+                (4, ai_bot.id)
+            ],
+        })
+
+        self.channel_id = channel
+
+        # Sync existing messages to the channel
+        for msg in self.chat_message_ids.filtered(lambda m: m.role in ('user', 'assistant')):
+            author = self.env.user.partner_id if msg.role == 'user' else ai_bot
+            channel.message_post(
+                body=msg.content,
+                author_id=author.id,
+                message_type='comment',
+                subtype_xmlid='mail.mt_comment'
+            )
+
+        return {
+            'type': 'ir.actions.act_window',
+            'res_model': 'mail.channel',
+            'res_id': channel.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
+    @api.model
+    def get_or_create_ai_channel_for_user(self):
+        """Get or create a personal AI channel for the current user"""
+        ai_bot = self._get_ai_bot_partner()
+
+        # Look for existing AI channel - a chat with both the user and AI bot
+        channel = self.env['mail.channel'].search([
+            ('channel_type', '=', 'chat'),
+            ('is_ai_channel', '=', True),
+            ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
+        ], limit=1)
+
+        if channel:
+            return channel
+
+        # Create new AI channel
+        channel = self.env['mail.channel'].create({
+            'name': f'AI Assistant',
+            'description': 'Personal AI Assistant powered by IT Patagon',
+            'channel_type': 'chat',
+            'is_ai_channel': True,  # Explicitly set this flag
+            'channel_partner_ids': [
+                (4, self.env.user.partner_id.id),
+                (4, ai_bot.id)
+            ],
+        })
+
+        # Create linked AI session
+        session = self.create({
+            'name': 'AI Assistant Chat',
+            'user_id': self.env.user.id,
+            'channel_id': channel.id,
+        })
+        channel.ai_session_id = session.id
+
+        return channel
+
     def get_messages_for_api(self):
         """Get messages formatted for AI API"""
         import json
@@ -79,16 +251,43 @@ class AIChatSession(models.Model):
         self.ensure_one()
         messages = []
 
-        # Track which tool_call_ids have responses
+        # PASS 1: Track which tool_call_ids have responses
         tool_call_ids_with_responses = set()
-        for msg in self.message_ids:
+        for msg in self.chat_message_ids:
             if msg.role == 'tool' and msg.tool_call_id:
                 tool_call_ids_with_responses.add(msg.tool_call_id)
 
-        for msg in self.message_ids.sorted('create_date'):
+        # PASS 2: Build valid tool_call_ids (only from assistant messages that will be included)
+        valid_tool_call_ids = set()
+        for msg in self.chat_message_ids.sorted('create_date'):
+            if msg.role == 'assistant' and msg.tool_calls:
+                try:
+                    tool_calls_data = json.loads(msg.tool_calls)
+                    if tool_calls_data:
+                        # Check if ALL tool calls have responses
+                        all_have_responses = all(
+                            tc.get('tool_call_id') in tool_call_ids_with_responses
+                            for tc in tool_calls_data
+                        )
+
+                        if all_have_responses:
+                            # This assistant message will be included, so mark its tool_call_ids as valid
+                            for tc in tool_calls_data:
+                                if tc.get('tool_call_id'):
+                                    valid_tool_call_ids.add(tc['tool_call_id'])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+        # PASS 3: Build messages array, only including tool results with valid tool_call_ids
+        for msg in self.chat_message_ids.sorted('create_date'):
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
                 _logger.warning(f"Skipping tool message {msg.id} without tool_call_id")
+                continue
+
+            # Skip tool messages whose assistant message was excluded (prevents orphaned tool results)
+            if msg.role == 'tool' and msg.tool_call_id not in valid_tool_call_ids:
+                _logger.warning(f"Skipping tool message {msg.id} with tool_call_id {msg.tool_call_id} - corresponding assistant message not included")
                 continue
 
             message_dict = {

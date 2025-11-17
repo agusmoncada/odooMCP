@@ -27,13 +27,15 @@ class AIChatController(http.Controller):
     """Controller for AI Chat endpoints"""
 
     @http.route('/ai_chat/send_message', type='json', auth='user')
-    def send_message(self, session_id=None, message=None, **kwargs):
+    def send_message(self, session_id=None, message=None, view_context=None, user_context=None, **kwargs):
         """
         Send a message to the AI and get a response
 
         Args:
             session_id: ID of the chat session (creates new if None)
             message: User message text
+            view_context: Current view/module/action context (optional)
+            user_context: User language, timezone, etc. (optional)
 
         Returns:
             Dict with response data
@@ -83,11 +85,16 @@ class AIChatController(http.Controller):
             # Prepare messages for AI
             messages = []
 
-            # Add system prompt
-            if config['system_prompt']:
+            # Add context-aware system prompt
+            system_prompt = self._build_context_aware_prompt(
+                config['system_prompt'],
+                view_context=view_context,
+                user_context=user_context
+            )
+            if system_prompt:
                 messages.append({
                     'role': 'system',
-                    'content': config['system_prompt']
+                    'content': system_prompt
                 })
 
             # Add conversation history
@@ -188,109 +195,261 @@ class AIChatController(http.Controller):
             }
 
     def _execute_tool_calls(self, session, response, ai_provider, config):
-        """Execute MCP tool calls and get final AI response"""
-        tool_calls = response.get('tool_calls', [])
+        """Execute MCP tool calls and get final AI response, looping if more tools are needed"""
         current_messages = response.get('messages', [])
-
         Message = http.request.env['ai.chat.message']
         mcp_registry = http.request.env['mcp.server.registry']
+        tools = mcp_registry.list_tools()
 
         graph_data = None
+        max_iterations = 20  # Prevent infinite loops (allows batching up to 20 operations)
+        iteration = 0
 
-        # Execute each tool call and save results immediately
-        # This ensures tool results are saved even if later steps fail
-        for tool_call in tool_calls:
+        # Loop to handle multiple rounds of tool calls
+        while iteration < max_iterations:
+            tool_calls = response.get('tool_calls', [])
+
+            if not tool_calls:
+                # No more tool calls, we're done
+                break
+
+            iteration += 1
+            _logger.info(f"Tool execution iteration {iteration}: processing {len(tool_calls)} tool calls")
+
+            # Execute each tool call and save results immediately
+            for tool_call in tool_calls:
+                try:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call['arguments']
+                    tool_call_id = tool_call['tool_call_id']
+
+                    _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+
+                    # Execute tool via MCP
+                    tool_result = mcp_registry.call_tool(tool_name, tool_args)
+
+                    # Log errors from tool execution
+                    if not tool_result.get('success'):
+                        _logger.error(f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}")
+
+                    # Extract graph data if this was a generate_graph call
+                    if tool_name == 'generate_graph' and tool_result.get('success'):
+                        graph_data = tool_result.get('graph_data')
+
+                    # Add tool result to messages
+                    current_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tool_call_id,
+                        'name': tool_name,
+                        'content': json.dumps(tool_result, cls=OdooJSONEncoder)
+                    })
+
+                    # Save tool result message IMMEDIATELY
+                    metadata = {'tool_name': tool_name}
+                    if graph_data:
+                        metadata['graph_data'] = graph_data
+
+                    Message.create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(tool_result, cls=OdooJSONEncoder),
+                        'tool_call_id': tool_call_id,
+                        'metadata': json.dumps(metadata)
+                    })
+
+                    # Commit after each tool result
+                    http.request.env.cr.commit()
+
+                except Exception as e:
+                    _logger.exception(f"Error executing tool {tool_name}")
+                    # Save error as tool result to maintain message integrity
+                    error_result = {'success': False, 'error': str(e)}
+                    current_messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tool_call_id,
+                        'name': tool_name,
+                        'content': json.dumps(error_result)
+                    })
+                    Message.create({
+                        'session_id': session.id,
+                        'role': 'tool',
+                        'content': json.dumps(error_result),
+                        'tool_call_id': tool_call_id,
+                        'metadata': json.dumps({'tool_name': tool_name, 'error': True})
+                    })
+                    http.request.env.cr.commit()
+
+            # After executing tools, ask AI if it wants to call more tools or provide final response
             try:
-                tool_name = tool_call['name']
-                tool_args = tool_call['arguments']
-                tool_call_id = tool_call['tool_call_id']
+                _logger.info(f"Calling AI after tool execution to check for more tool calls")
 
-                _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                # Check if we're at max iterations before calling AI again
+                if iteration >= max_iterations:
+                    _logger.warning(f"Reached maximum tool execution iterations ({max_iterations})")
+                    # Ask for final summary without allowing more tool calls
+                    final_response = ai_provider.chat(
+                        messages=current_messages,
+                        temperature=config['temperature'],
+                        max_tokens=config['max_tokens']
+                    )
+                    choice = final_response.get('choices', [{}])[0]
+                    final_message = choice.get('message', {}).get('content', '')
+                    return {
+                        'success': True,
+                        'message': final_message or "I've completed the available tool operations.",
+                        'graph_data': graph_data
+                    }
 
-                # Execute tool via MCP
-                tool_result = mcp_registry.call_tool(tool_name, tool_args)
+                # Call chat_with_tools again - this allows the AI to see tool results
+                # and decide whether to call more tools or provide a final response
+                response = ai_provider.chat_with_tools(
+                    messages=current_messages,
+                    mcp_tools=tools
+                )
 
-                # Log errors from tool execution
-                if not tool_result.get('success'):
-                    _logger.error(f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}")
+                # If the AI wants to execute more tools, loop will continue
+                if response.get('requires_tool_execution'):
+                    # Don't save intermediate assistant messages - they clutter the UI
+                    # Just update current_messages for the next iteration
+                    current_messages = response.get('messages', current_messages)
+                    continue  # Loop back to execute more tools
 
-                # Extract graph data if this was a generate_graph call
-                if tool_name == 'generate_graph' and tool_result.get('success'):
-                    graph_data = tool_result.get('graph_data')
-
-                # Add tool result to messages
-                current_messages.append({
-                    'role': 'tool',
-                    'tool_call_id': tool_call_id,
-                    'name': tool_name,
-                    'content': json.dumps(tool_result, cls=OdooJSONEncoder)
-                })
-
-                # Save tool result message IMMEDIATELY to ensure it's persisted
-                # even if subsequent steps fail
-                metadata = {'tool_name': tool_name}
-                if graph_data:
-                    metadata['graph_data'] = graph_data
-
-                Message.create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(tool_result, cls=OdooJSONEncoder),
-                    'tool_call_id': tool_call_id,
-                    'metadata': json.dumps(metadata)
-                })
-
-                # Commit after each tool result to prevent orphaned tool_calls
-                http.request.env.cr.commit()
+                # No more tool calls - AI provided final response
+                _logger.info(f"AI provided final response after {iteration} tool execution rounds")
+                return {
+                    'success': True,
+                    'message': response.get('message', ''),
+                    'graph_data': graph_data
+                }
 
             except Exception as e:
-                _logger.exception(f"Error executing tool {tool_name}")
-                # Save error as tool result to maintain message integrity
-                error_result = {'success': False, 'error': str(e)}
-                current_messages.append({
-                    'role': 'tool',
-                    'tool_call_id': tool_call_id,
-                    'name': tool_name,
-                    'content': json.dumps(error_result)
-                })
-                Message.create({
-                    'session_id': session.id,
-                    'role': 'tool',
-                    'content': json.dumps(error_result),
-                    'tool_call_id': tool_call_id,
-                    'metadata': json.dumps({'tool_name': tool_name, 'error': True})
-                })
-                http.request.env.cr.commit()
+                _logger.exception("Error in tool execution loop")
+                return {
+                    'success': True,  # Tool results are saved
+                    'message': f"I encountered an error while processing: {str(e)}",
+                    'graph_data': graph_data
+                }
 
-        # Get final response from AI after tool execution
+        # This should never be reached due to the iteration check above
+        _logger.warning(f"Exited tool execution loop unexpectedly")
+        return {
+            'success': True,
+            'message': "Tool execution completed.",
+            'graph_data': graph_data
+        }
+
+    def _build_context_aware_prompt(self, base_prompt, view_context=None, user_context=None):
+        """Build context-aware system prompt with user and view context"""
+        context_parts = [base_prompt] if base_prompt else []
+
+        # Add user context
+        user = request.env.user
+        context_parts.append(f"""
+USER CONTEXT:
+- Name: {user.name}
+- Language: {user.lang}
+- Timezone: {user.tz or 'UTC'}
+- Company: {user.company_id.name if user.company_id else 'N/A'}
+- Email: {user.email or 'N/A'}
+
+IMPORTANT LANGUAGE INSTRUCTION:
+You MUST respond in the user's configured language ({user.lang}).
+- If the language is Spanish (es_ES, es_MX, es_AR, etc.), respond in Spanish.
+- If the language is French (fr_FR, fr_CA, etc.), respond in French.
+- If the language is English (en_US, en_GB, etc.), respond in English.
+- And so on for other languages.
+Only use a different language if the user explicitly requests it.
+""")
+
+        # Add view context if provided
+        if view_context:
+            current_model = view_context.get('model')
+            action_name = view_context.get('action_name')
+            active_id = view_context.get('active_id')
+            view_type = view_context.get('view_type')
+
+            if current_model or action_name:
+                context_section = "\nCURRENT VIEW CONTEXT:"
+
+                if action_name:
+                    context_section += f"\n- User is currently in: {action_name}"
+
+                if current_model:
+                    context_section += f"\n- Working with model: {current_model}"
+
+                if view_type:
+                    context_section += f"\n- View type: {view_type}"
+
+                if active_id and current_model:
+                    # Try to get record name for better context
+                    try:
+                        record = request.env[current_model].browse(active_id)
+                        if record.exists():
+                            record_name = record.display_name or record.name if hasattr(record, 'name') else str(active_id)
+                            context_section += f"\n- Looking at record: {record_name} (ID: {active_id})"
+                    except Exception as e:
+                        _logger.debug(f"Could not fetch record context: {e}")
+                        context_section += f"\n- Active record ID: {active_id}"
+
+                context_section += "\n\nThe user is likely asking about something related to this view or record. Consider this context when providing assistance."
+                context_parts.append(context_section)
+
+        # Add user permissions context (optional, lightweight)
         try:
-            _logger.info(f"Getting final AI response after executing {len(tool_calls)} tools")
-            final_response = ai_provider.chat(
-                messages=current_messages,
-                temperature=config['temperature'],
-                max_tokens=config['max_tokens']
-            )
+            permissions = []
+            if user.has_group('base.group_system'):
+                permissions.append('System Administrator')
+            if user.has_group('sales_team.group_sale_manager'):
+                permissions.append('Sales Manager')
+            if user.has_group('account.group_account_manager'):
+                permissions.append('Accounting Manager')
 
-            choice = final_response.get('choices', [{}])[0]
-            final_message = choice.get('message', {}).get('content', '')
+            if permissions:
+                context_parts.append(f"\nUSER PERMISSIONS: {', '.join(permissions)}")
+        except Exception as e:
+            _logger.debug(f"Could not fetch user permissions: {e}")
 
-            _logger.info(f"Final AI response received: {final_message[:100]}...")
+        return "\n".join(context_parts)
+
+    @http.route('/ai_chat/get_user_context', type='json', auth='user')
+    def get_user_context(self, **kwargs):
+        """Get comprehensive user context for AI"""
+        try:
+            user = request.env.user
+
+            # Basic user info
+            user_context_data = {
+                'id': user.id,
+                'name': user.name,
+                'login': user.login,
+                'email': user.email,
+                'lang': user.lang,
+                'tz': user.tz or 'UTC',
+            }
+
+            # Company info
+            if user.company_id:
+                user_context_data['company'] = {
+                    'id': user.company_id.id,
+                    'name': user.company_id.name,
+                }
+
+            # Check specific permissions
+            user_context_data['permissions'] = {
+                'is_admin': user.has_group('base.group_system'),
+                'is_sales_user': user.has_group('sales_team.group_sale_salesman') if request.env['ir.model'].search([('model', '=', 'sales_team')]) else False,
+                'is_sales_manager': user.has_group('sales_team.group_sale_manager') if request.env['ir.model'].search([('model', '=', 'sales_team')]) else False,
+                'is_accounting_user': user.has_group('account.group_account_user') if request.env['ir.model'].search([('model', '=', 'account')]) else False,
+            }
 
             return {
                 'success': True,
-                'message': final_message,
-                'graph_data': graph_data
+                'user_context': user_context_data
             }
 
         except Exception as e:
-            _logger.exception("Error getting final AI response after tool execution")
-            # Return a user-friendly error message
-            # Tool results are already saved, so conversation state is valid
-            return {
-                'success': True,  # Return success since tool results are saved
-                'message': f"I encountered an error while processing the tool results: {str(e)}",
-                'graph_data': graph_data
-            }
+            _logger.exception("Error getting user context")
+            return {'success': False, 'error': str(e)}
 
     @http.route('/ai_chat/get_sessions', type='json', auth='user')
     def get_sessions(self, limit=20, **kwargs):
@@ -331,7 +490,16 @@ class AIChatController(http.Controller):
                 return {'error': 'Invalid session'}
 
             messages = []
-            for m in session.message_ids.sorted('create_date'):
+            for m in session.chat_message_ids.sorted('create_date'):
+                # Skip tool result messages - they're technical implementation details
+                if m.role == 'tool':
+                    continue
+
+                # Also skip assistant messages with tool_calls but no content
+                # (these are intermediate coordination messages)
+                if m.role == 'assistant' and m.tool_calls and not m.content:
+                    continue
+
                 msg_data = {
                     'id': m.id,
                     'role': m.role,
@@ -510,3 +678,18 @@ class AIChatController(http.Controller):
         except Exception as e:
             _logger.exception("Error processing invoice")
             return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/open_discuss_channel', type='http', auth='user')
+    def open_discuss_channel(self, **kwargs):
+        """Open or create AI Assistant channel in Discuss"""
+        try:
+            # Get or create AI channel
+            session_model = request.env['ai.chat.session']
+            channel = session_model.get_or_create_ai_channel_for_user()
+
+            # Redirect to Discuss with a message
+            return request.redirect('/web#action=mail.action_discuss&active_id=%s' % channel.id)
+
+        except Exception as e:
+            _logger.exception("Error opening AI discuss channel")
+            return request.redirect('/web')

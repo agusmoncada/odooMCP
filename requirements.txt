@@ -34,6 +34,25 @@
 # PyPDF2>=1.26.0,<4.0.0
 
 # ===========================================
+# Graph Rendering (Optional but Recommended)
+# ===========================================
+# For rendering graphs as images in Discuss messages:
+matplotlib>=3.5.0,<4.0.0
+
+# Why matplotlib?
+# - Lightweight (~20MB installed)
+# - Pure Python (no C compilation)
+# - Widely used, stable, mature
+# - Compatible with Odoo v16
+# - No conflicts with gevent/eventlet
+# - Works in Docker/low memory environments
+#
+# Install: pip install matplotlib
+#
+# If not installed, graphs will still work but won't render images
+# (AI will return data tables instead)
+
+# ===========================================
 # What We Replaced
 # ===========================================
 #
@@ -83,8 +102,10 @@
 # ✅ Session management
 # ✅ Chat history
 # ✅ PDF invoice processing (PyPDF2)
-# ✅ Graph generation (pure Python)
+# ✅ Graph generation (matplotlib for images, pure Python fallback)
 # ✅ Dynamic model dropdown
+# ✅ Typing indicator in Discuss
+# ✅ Graph image embedding in chat messages
 
 # ===========================================
 # Performance Comparison

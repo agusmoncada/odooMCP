@@ -21,7 +21,7 @@
     'website': 'https://www.yourcompany.com',
     'license': 'LGPL-3',
     'images': ['static/description/icon.png'],
-    'depends': ['base', 'web'],
+    'depends': ['base', 'web', 'mail'],
     'data': [
         'security/ir.model.access.csv',
         'views/ai_chat_views.xml',
@@ -36,6 +36,7 @@
             'odoo_ai_chat/static/src/js/ai_chat_service.js',
             'odoo_ai_chat/static/src/js/ai_chat_widget.js',
             'odoo_ai_chat/static/src/js/systray_item.js',
+            'odoo_ai_chat/static/src/js/discuss_typing_indicator.js',
             # CSS
             'odoo_ai_chat/static/src/css/ai_chat.css',
             # Templates
@@ -45,4 +46,5 @@
     'installable': True,
     'application': True,
     'auto_install': False,
+    'post_init_hook': 'post_init_hook',
 }

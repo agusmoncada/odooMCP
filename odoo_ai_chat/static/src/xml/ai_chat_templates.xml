@@ -77,7 +77,12 @@
                                 <div class="o_ai_chat_message"
                                      t-att-class="'o_ai_chat_message_' + message.role">
                                     <div class="o_ai_chat_message_avatar">
-                                        <i t-att-class="message.role === 'user' ? 'fa fa-user' : 'fa fa-robot'"/>
+                                        <t t-if="message.role === 'user'">
+                                            <i class="fa fa-user"/>
+                                        </t>
+                                        <t t-else="">
+                                            <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI" class="o_ai_chat_avatar_img"/>
+                                        </t>
                                     </div>
                                     <div class="o_ai_chat_message_content">
                                         <div class="o_ai_chat_message_text">
@@ -103,7 +108,7 @@
                         <t t-if="state.loading">
                             <div class="o_ai_chat_message o_ai_chat_message_assistant">
                                 <div class="o_ai_chat_message_avatar">
-                                    <i class="fa fa-robot"/>
+                                    <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI" class="o_ai_chat_avatar_img"/>
                                 </div>
                                 <div class="o_ai_chat_message_content">
                                     <div class="o_ai_chat_typing">
