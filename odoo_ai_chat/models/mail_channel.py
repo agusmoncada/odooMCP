@@ -592,16 +592,35 @@ Remember: Execute ALL required tool calls before providing a final text response
             _logger.info(f"[AI Chat] update_view_context called for channel {self.id} ({self.name})")
             _logger.info(f"[AI Chat] Context data received: {context_data}")
 
-            self.current_view_context = json.dumps(context_data)
+            # Ensure we have the required fields
+            if not context_data.get('model') or not context_data.get('active_id'):
+                _logger.warning(f"[AI Chat] Invalid context data: missing model or active_id")
+                return
 
+            # Store as JSON with explicit write to ensure transaction integrity  
+            context_json = json.dumps(context_data)
+            
+            # Use sudo().write() for more reliable persistence
+            self.sudo().write({'current_view_context': context_json})
+            
             # Force write to database
             self.env.cr.commit()
 
             _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
 
-            # Verify it was saved
+            # Verify it was saved by refreshing and reading again
+            self.refresh(['current_view_context'])
             saved_context = self.current_view_context
             _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
+            
+            if saved_context:
+                # Parse back to verify integrity
+                try:
+                    parsed = json.loads(saved_context)
+                    _logger.info(f"[AI Chat] Verified context: model={parsed.get('model')}, active_id={parsed.get('active_id')}")
+                except json.JSONDecodeError as je:
+                    _logger.error(f"[AI Chat] Context JSON is corrupted: {je}")
+                    
         except Exception as e:
             _logger.error(f"[AI Chat] Failed to update view context: {e}", exc_info=True)
 
@@ -611,8 +630,12 @@ Remember: Execute ALL required tool calls before providing a final text response
         Returns:
             String with formatted view context information, or None if no context
         """
+        # Refresh the record to get latest context in case of transaction isolation
+        self.invalidate_cache(['current_view_context'])
+        self.refresh(['current_view_context'])
+        
         if not self.current_view_context:
-            _logger.info("[AI Chat] No view context stored for channel")
+            _logger.info(f"[AI Chat] No view context stored for channel {self.id}")
             return None
 
         try:

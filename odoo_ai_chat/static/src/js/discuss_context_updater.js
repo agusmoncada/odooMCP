@@ -58,10 +58,23 @@ const discussContextUpdaterService = {
 
                 console.log("[AI Chat] Updating AI channel context:", currentContext);
 
+                // Prepare context for backend - ensure it's serializable
+                const contextForBackend = {
+                    model: currentContext.model,
+                    active_id: currentContext.active_id,
+                    active_ids: currentContext.active_ids || [],
+                    action_id: currentContext.action_id,
+                    action_name: currentContext.action_name,
+                    view_type: currentContext.view_type,
+                    timestamp: currentContext.timestamp || Date.now()
+                };
+
+                console.log("[AI Chat] Context prepared for backend:", contextForBackend);
+
                 // Find the AI channel for the current user
                 // We'll call a backend method to update the context
                 const result = await rpc("/ai_chat/update_channel_context", {
-                    context: currentContext,
+                    context: contextForBackend,
                 });
 
                 console.log("[AI Chat] Update result:", result);
