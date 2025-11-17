@@ -13,6 +13,7 @@ export class AIChatSystrayItem extends Component {
         this.rpc = useService("rpc");
         this.action = useService("action");
         this.messaging = useService("messaging");
+        this.notification = useService("notification");
         // Ensure typing indicator service starts (for Discuss AI chat)
         useService("ai_chat_typing_indicator");
     }
@@ -31,35 +32,67 @@ export class AIChatSystrayItem extends Component {
             if (result.success && result.channel_id) {
                 console.log("[AI Chat] Opening channel", result.channel_id);
 
-                // Open the channel as a chat window at the bottom by setting its fold state
-                await this.rpc("/web/dataset/call_kw/mail.channel/channel_fold", {
-                    model: "mail.channel",
-                    method: "channel_fold",
-                    args: [[result.channel_id]],
-                    kwargs: {
-                        state: "open"
-                    }
-                });
+                // Wait for messaging to be ready
+                await this.messaging.isReady;
+                const messaging = await this.messaging.get();
+                console.log("[AI Chat] Messaging service ready");
 
-                console.log("[AI Chat] Channel folded to open state");
-
-                // Trigger a bus notification to refresh the messaging menu
-                // This will make the chat window appear at the bottom
+                // Get or create the thread
+                let thread;
                 try {
-                    await this.messaging.isReady;
-                    const messaging = await this.messaging.get();
+                    thread = messaging.models['Thread'].findFromIdentifyingData({
+                        id: result.channel_id,
+                        model: 'mail.channel',
+                    });
 
-                    // Force refresh of the messaging menu to show the chat window
-                    if (messaging && messaging.refresh) {
-                        await messaging.refresh();
+                    if (!thread) {
+                        console.log("[AI Chat] Creating new thread");
+                        thread = messaging.models['Thread'].insert({
+                            id: result.channel_id,
+                            model: 'mail.channel',
+                        });
                     }
                 } catch (e) {
-                    console.log("[AI Chat] Could not refresh messaging:", e.message);
+                    console.error("[AI Chat] Error getting/creating thread:", e);
+                    // Fallback: just set fold state and reload
+                    await this.rpc("/web/dataset/call_kw/mail.channel/channel_fold", {
+                        model: "mail.channel",
+                        method: "channel_fold",
+                        args: [[result.channel_id]],
+                        kwargs: { state: "open" }
+                    });
+                    this.notification.add("AI Chat will open after page refresh", { type: "info" });
+                    setTimeout(() => window.location.reload(), 1000);
+                    return;
+                }
+
+                console.log("[AI Chat] Thread:", thread);
+                console.log("[AI Chat] Thread methods:", Object.keys(thread));
+
+                // Open the chat window using the thread
+                if (thread && thread.openAsChatWindow) {
+                    console.log("[AI Chat] Calling thread.openAsChatWindow()");
+                    thread.openAsChatWindow();
+                } else if (thread && thread.open) {
+                    console.log("[AI Chat] Calling thread.open()");
+                    thread.open();
+                } else {
+                    console.log("[AI Chat] No open method found on thread");
+                    // Set fold state and reload
+                    await this.rpc("/web/dataset/call_kw/mail.channel/channel_fold", {
+                        model: "mail.channel",
+                        method: "channel_fold",
+                        args: [[result.channel_id]],
+                        kwargs: { state: "open" }
+                    });
+                    this.notification.add("AI Chat will open after page refresh", { type: "info" });
+                    setTimeout(() => window.location.reload(), 1000);
                 }
             }
         } catch (error) {
             console.error("[AI Chat] Error opening AI chat:", error);
             console.error("[AI Chat] Error stack:", error.stack);
+            this.notification.add("Error opening AI Chat. Please try again.", { type: "danger" });
         }
     }
 }
