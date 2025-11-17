@@ -116,19 +116,23 @@ class MailChannel(models.Model):
 
         # Check if AI should respond in this channel:
         # 1. Channel is explicitly marked as AI channel (backward compatibility) - always respond
-        # 2. 1-on-1 chat with AI (only 2 members) - always respond
-        # 3. Group chat (3+ members) - ONLY respond when @mentioned
+        # 2. Direct message/chat (channel_type='chat') - always respond
+        # 3. Group channel (channel_type='channel') - ONLY respond when @mentioned
         # This prevents AI from responding to every message in group chats and overloading the system
 
         ai_is_member = ai_bot.id in self.channel_partner_ids.ids
         ai_is_mentioned = ai_bot.id in message.partner_ids.ids
         member_count = len(self.channel_partner_ids)
-        is_direct_message = member_count == 2 and ai_is_member  # 1-on-1 chat with AI
-        is_group_chat = member_count >= 3
+
+        # Check channel type to distinguish between DMs and group channels
+        # channel_type='chat' = Direct Message (DM) - 1-on-1 chat
+        # channel_type='channel' = Group Channel - can have any number of members
+        is_direct_message = self.channel_type == 'chat' and ai_is_member
+        is_group_chat = self.channel_type == 'channel'
 
         # Decision logic:
         # - is_ai_channel: Always respond (backward compatibility for dedicated AI channels)
-        # - Direct message: Always respond (1-on-1 with AI)
+        # - Direct message (DM): Always respond (1-on-1 with AI)
         # - Group chat: Only respond when @mentioned
         if self.is_ai_channel:
             should_respond = True
