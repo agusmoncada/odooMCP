@@ -13,10 +13,11 @@ An advanced AI-powered chat assistant addon for Odoo v16 Community Edition that 
 - **Tool Calling**: AI can interact with Odoo data using MCP tools (search, read, create, update records)
 - **📊 Graph Generation**: AI can create interactive charts and graphs from Odoo data (line, bar, pie, area, scatter, doughnut)
 - **📄 PDF Invoice Processing**: Upload PDF invoices and automatically create vendor bills with AI-powered data extraction
+- **🔍 OCR Support**: Process scanned/image-based PDFs using vision AI models (GPT-4 Vision, Claude Vision)
 - **Session Management**: Create multiple chat sessions and switch between them
 - **Chat History**: All conversations are saved and can be reviewed later
 - **Configurable**: Extensive configuration options for AI behavior, model selection, and more
-- **🚀 Zero Dependencies**: Uses lightweight alternatives - no pip install required!
+- **🚀 Minimal Dependencies**: Uses lightweight alternatives - only PyMuPDF for OCR (optional)
 
 ## Installation
 
@@ -85,9 +86,10 @@ sudo systemctl restart odoo
   2. Refresh the page
   3. Check browser console for JavaScript errors
 
-**Issue:** PDF processing fails
-- **Cause:** PDF might be image-based (scanned) without text
-- **Solution:** Use OCR-enabled PDFs or text-based PDFs
+**Issue:** PDF processing fails for scanned PDFs
+- **Cause:** PyMuPDF not installed for OCR support
+- **Fix:** `pip3 install PyMuPDF>=1.23.0`
+- **Note:** Text-based PDFs work without any additional dependencies. OCR is only needed for scanned/image-based PDFs.
 
 **Issue:** Graph generation fails
 - **Solution:** Check that the model has numeric fields for the y-axis
@@ -143,14 +145,17 @@ When MCP tools are enabled, the AI can:
 
 **PDF invoice processing:**
 1. Click the paperclip icon (📎) in the chat input
-2. Select a PDF invoice file
+2. Select a PDF invoice file (text-based OR scanned)
 3. The AI will automatically:
    - Extract invoice data (vendor, amounts, line items)
+   - For scanned PDFs: Use OCR via vision AI models (GPT-4 Vision, Claude Vision)
    - Show you the extracted information
    - Create a vendor bill in Odoo
    - Attach the PDF to the bill
 
 Or simply say: "I uploaded an invoice, please process it and create a vendor bill"
+
+**Note:** OCR for scanned PDFs requires PyMuPDF (`pip install PyMuPDF`). Text-based PDFs work without any additional dependencies.
 
 ## MCP Server Features
 

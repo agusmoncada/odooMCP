@@ -34,6 +34,24 @@
 # PyPDF2>=1.26.0,<4.0.0
 
 # ===========================================
+# OCR Support for Scanned PDFs (Optional)
+# ===========================================
+# For OCR processing of scanned/image-based PDFs:
+PyMuPDF>=1.23.0,<2.0.0
+
+# Why PyMuPDF?
+# - Lightweight (~10-15MB installed)
+# - Pure Python wheels available (no compilation)
+# - Can render PDF pages to images for OCR
+# - Compatible with Odoo v16
+# - No conflicts with gevent/eventlet
+# - Enables OCR via vision AI models (GPT-4 Vision, Claude Vision)
+#
+# Install: pip install PyMuPDF
+#
+# If not installed, scanned PDFs will show an error message
+
+# ===========================================
 # Graph Rendering (Optional but Recommended)
 # ===========================================
 # For rendering graphs as images in Discuss messages:

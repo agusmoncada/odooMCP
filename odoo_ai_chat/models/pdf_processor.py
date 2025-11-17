@@ -18,6 +18,14 @@ except ImportError:
     PYPDF2_AVAILABLE = False
     _logger.warning("PyPDF2 not available. PDF processing will be disabled.")
 
+# Use PyMuPDF for OCR support (convert PDF pages to images)
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+    _logger.warning("PyMuPDF not available. OCR for scanned PDFs will be disabled.")
+
 
 class PDFInvoiceProcessor:
     """Process PDF invoices and extract data"""
@@ -53,10 +61,31 @@ class PDFInvoiceProcessor:
                 _logger.info(f"First 200 chars: {text[:200]}")
 
             if not text or text_length < 50:
-                return {
-                    'success': False,
-                    'error': f'Could not extract sufficient text from PDF ({text_length} characters found). This PDF appears to be scanned/image-based. Please use a text-based PDF or a PDF with OCR text layer. For scanned documents, you may need to OCR the PDF first using an external tool.'
-                }
+                # Try OCR for scanned/image-based PDFs
+                _logger.info("Text extraction failed, attempting OCR...")
+
+                if not PYMUPDF_AVAILABLE:
+                    return {
+                        'success': False,
+                        'error': f'Could not extract sufficient text from PDF ({text_length} characters found). This PDF appears to be scanned/image-based. OCR is not available (PyMuPDF not installed). Please install PyMuPDF: pip install PyMuPDF'
+                    }
+
+                try:
+                    text = self._extract_text_with_ocr(pdf_content, filename)
+                    text_length = len(text.strip()) if text else 0
+                    _logger.info(f"OCR extracted {text_length} characters from PDF")
+
+                    if not text or text_length < 50:
+                        return {
+                            'success': False,
+                            'error': f'OCR could not extract sufficient text from PDF ({text_length} characters found). The PDF may be empty, corrupted, or have very low quality images.'
+                        }
+                except Exception as e:
+                    _logger.exception("OCR extraction failed")
+                    return {
+                        'success': False,
+                        'error': f'OCR processing failed: {str(e)}'
+                    }
 
             # Use AI to parse the invoice text
             invoice_data = self._parse_with_ai(text, filename)
@@ -123,6 +152,165 @@ class PDFInvoiceProcessor:
         except Exception as e:
             _logger.exception("Error extracting text from PDF")
             raise
+
+    def _extract_text_with_ocr(self, pdf_content: bytes, filename: str) -> str:
+        """
+        Extract text from scanned PDF using OCR via vision AI models
+
+        Process:
+        1. Convert PDF pages to images using PyMuPDF
+        2. Send images to OpenRouter vision model (GPT-4 Vision, Claude Vision, etc.)
+        3. Extract text from images using vision model
+
+        Args:
+            pdf_content: PDF file content as bytes
+            filename: Original filename for logging
+
+        Returns:
+            Extracted text from all pages
+        """
+        if not PYMUPDF_AVAILABLE:
+            raise exceptions.UserError("PyMuPDF not installed. Cannot perform OCR.")
+
+        try:
+            # Open PDF with PyMuPDF
+            pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
+            num_pages = len(pdf_document)
+
+            _logger.info(f"Converting {num_pages} PDF pages to images for OCR")
+
+            # Convert PDF pages to images
+            page_images = []
+            for page_num in range(num_pages):
+                page = pdf_document[page_num]
+
+                # Render page to image (PNG format, 300 DPI for good OCR quality)
+                pix = page.get_pixmap(matrix=fitz.Matrix(300/72, 300/72))
+
+                # Convert to bytes
+                img_bytes = pix.tobytes("png")
+
+                # Convert to base64
+                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+
+                page_images.append({
+                    'page_num': page_num + 1,
+                    'image_b64': img_b64,
+                    'format': 'png'
+                })
+
+                _logger.info(f"Converted page {page_num + 1} to image ({len(img_bytes)} bytes)")
+
+            pdf_document.close()
+
+            # Use vision AI model to extract text from images
+            extracted_text = self._ocr_with_vision_model(page_images, filename)
+
+            return extracted_text
+
+        except Exception as e:
+            _logger.exception("Error during OCR extraction")
+            raise
+
+    def _ocr_with_vision_model(self, page_images: list, filename: str) -> str:
+        """
+        Use OpenRouter vision model to extract text from PDF page images
+
+        Args:
+            page_images: List of dicts with page_num, image_b64, format
+            filename: Original filename for context
+
+        Returns:
+            Extracted text from all pages
+        """
+        # Get AI config
+        config = self.env['res.config.settings'].get_ai_config()
+
+        if not config.get('api_key'):
+            raise exceptions.UserError("OpenRouter API key not configured")
+
+        from .ai_provider import OpenRouterProvider
+
+        # Use a vision-capable model
+        # Priority: GPT-4 Vision > Claude 3 Opus > Claude 3 Sonnet
+        vision_model = self._get_vision_model(config.get('model'))
+
+        ai_provider = OpenRouterProvider(
+            api_key=config['api_key'],
+            model=vision_model,
+            site_url=config['site_url'],
+            site_name=config['site_name']
+        )
+
+        all_text = []
+
+        for page_data in page_images:
+            page_num = page_data['page_num']
+            image_b64 = page_data['image_b64']
+
+            _logger.info(f"Performing OCR on page {page_num} using vision model {vision_model}")
+
+            # Create message with image
+            messages = [
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': 'Extract ALL text from this image. Return only the extracted text, no additional comments or formatting. Preserve the layout and structure as much as possible.'
+                        },
+                        {
+                            'type': 'image_url',
+                            'image_url': {
+                                'url': f'data:image/png;base64,{image_b64}'
+                            }
+                        }
+                    ]
+                }
+            ]
+
+            try:
+                response = ai_provider.chat(messages=messages, temperature=0.0, max_tokens=4000)
+                page_text = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+                if page_text:
+                    all_text.append(f"--- Page {page_num} ---\n{page_text}\n")
+                    _logger.info(f"Extracted {len(page_text)} characters from page {page_num}")
+
+            except Exception as e:
+                _logger.error(f"OCR failed for page {page_num}: {str(e)}")
+                # Continue with other pages even if one fails
+                continue
+
+        return '\n'.join(all_text)
+
+    def _get_vision_model(self, current_model: str) -> str:
+        """
+        Get appropriate vision model for OCR
+
+        If current model supports vision, use it.
+        Otherwise, fall back to a known vision-capable model.
+        """
+        # List of known vision-capable models
+        vision_models = [
+            'openai/gpt-4-turbo',
+            'openai/gpt-4o',
+            'openai/gpt-4-vision-preview',
+            'anthropic/claude-3-opus',
+            'anthropic/claude-3-sonnet',
+            'anthropic/claude-3.5-sonnet',
+            'anthropic/claude-3-haiku',
+        ]
+
+        # Check if current model is vision-capable
+        if any(vm in current_model for vm in ['gpt-4', 'claude-3', 'vision']):
+            _logger.info(f"Using current model for OCR: {current_model}")
+            return current_model
+
+        # Fall back to GPT-4 Turbo (widely available, good OCR)
+        fallback_model = 'openai/gpt-4o'
+        _logger.info(f"Current model {current_model} may not support vision. Using fallback: {fallback_model}")
+        return fallback_model
 
     def _parse_with_ai(self, text: str, filename: str) -> Dict:
         """
