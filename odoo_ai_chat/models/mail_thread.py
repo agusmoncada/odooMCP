@@ -165,7 +165,7 @@ class MailThread(models.AbstractModel):
 
                     # Execute tool calls
                     mcp_server = env['mcp.server.registry'].sudo()
-                    max_iterations = 10
+                    max_iterations = 20  # Increased from 10 to handle complex multi-step tasks
 
                     while tool_calls and iteration < max_iterations:
                         iteration += 1
@@ -189,9 +189,22 @@ class MailThread(models.AbstractModel):
 
                             _logger.info(f"Executing {tool_name} with args: {tool_args}")
 
+                            # Use savepoint to isolate tool execution
+                            # If tool fails, we can rollback and continue with other tools
                             try:
+                                env.cr.execute(f'SAVEPOINT tool_exec_{iteration}_{tool_call_id[:8]}')
                                 result = mcp_server.call_tool(tool_name, tool_args)
+                                env.cr.execute(f'RELEASE SAVEPOINT tool_exec_{iteration}_{tool_call_id[:8]}')
+                                _logger.info(f"Tool {tool_name} completed successfully")
                             except Exception as e:
+                                _logger.error(f"Tool {tool_name} failed: {e}")
+                                # Rollback to savepoint to recover transaction
+                                try:
+                                    env.cr.execute(f'ROLLBACK TO SAVEPOINT tool_exec_{iteration}_{tool_call_id[:8]}')
+                                    env.cr.execute(f'RELEASE SAVEPOINT tool_exec_{iteration}_{tool_call_id[:8]}')
+                                except Exception as rollback_error:
+                                    _logger.error(f"Could not rollback savepoint: {rollback_error}")
+                                # Return error in result so AI sees what went wrong
                                 result = {'success': False, 'error': str(e)}
 
                             # Add tool result to messages
@@ -220,6 +233,12 @@ class MailThread(models.AbstractModel):
                                 break
                         else:
                             break
+
+                    # Check if we hit max iterations
+                    if iteration >= max_iterations:
+                        _logger.warning(f"Reached max iterations ({max_iterations}) on {model_name}({record_id})")
+                        if not response_content:
+                            response_content = f"I completed {iteration} operations but reached the maximum number of steps allowed. Some tasks may be incomplete. Please let me know if you'd like me to continue."
 
                 # Delete thinking message
                 if thinking_message:
@@ -280,16 +299,28 @@ INSTRUCTIONS:
 - When the user asks you to update THIS record, use the write_record tool with model='{model_name}' and record_id={record.id}
 - Be concise and action-oriented
 - Confirm what you've done clearly
+- If you encounter errors (missing required fields, etc.), explain clearly what happened and suggest alternatives
 
-EXAMPLE:
+CREATING REMINDERS/ACTIVITIES:
+- To create reminders, use project.task model (simpler, fewer required fields)
+- DO NOT use mail.activity directly - it requires activity_type_id which is complex to set up
+- Example: create_record(model='project.task', values={{'name': 'Call client', 'date_deadline': '2025-11-23', 'user_id': {user.id}}})
+
+EXAMPLE 1 - Update Status:
 User: "@ai mark this as confirmed"
 You should:
 1. Call write_record(model='{model_name}', record_id={record.id}, values={{'state': 'sale'}})
 2. Respond: "✅ I've confirmed this quotation. It's now a sales order."
 
+EXAMPLE 2 - Create Reminder:
+User: "@ai remind me to call this client tomorrow"
+You should:
+1. Call create_record(model='project.task', values={{'name': 'Call {record_name}', 'date_deadline': 'tomorrow', 'user_id': {user.id}}})
+2. Respond: "✅ I've created a task to remind you to call this client tomorrow."
+
 Available tools:
 - search_records: Query Odoo data
-- create_record: Create new records
+- create_record: Create new records (use project.task for reminders)
 - write_record: Update records (use this to update THIS record)
 - generate_graph: Create visualizations
 
