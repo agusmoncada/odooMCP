@@ -15,6 +15,7 @@ const contextTrackerService = {
 
         // Store current context
         let currentContext = null;
+        let lastValidContext = null;  // Keep track of last context with model + active_id
 
         // Track context changes by monitoring the action service
         const originalDoAction = action.doAction;
@@ -70,12 +71,25 @@ const contextTrackerService = {
 
                 currentContext = context;
 
-                console.log("[AI Chat] Context updated:", {
-                    model: context.model,
-                    active_id: context.active_id,
-                    view_type: context.view_type,
-                    action_name: context.action_name,
-                });
+                // If this is a valid context (has model AND active_id), save it as lastValidContext
+                // This makes the context "sticky" - it persists even when navigating to views
+                // without a specific record (like Discuss, Apps list, etc.)
+                if (context.model && context.active_id) {
+                    lastValidContext = context;
+                    console.log("[AI Chat] Context updated (VALID - saved as sticky):", {
+                        model: context.model,
+                        active_id: context.active_id,
+                        view_type: context.view_type,
+                        action_name: context.action_name,
+                    });
+                } else {
+                    console.log("[AI Chat] Context updated (no model/active_id - keeping last valid):", {
+                        model: context.model,
+                        active_id: context.active_id,
+                        view_type: context.view_type,
+                        action_name: context.action_name,
+                    });
+                }
             } catch (error) {
                 console.debug("[AI Chat] Could not update context:", error);
             }
@@ -83,20 +97,25 @@ const contextTrackerService = {
 
         /**
          * Get the current context
+         * Returns the last valid context (with model + active_id) if available
          */
         function getCurrentContext() {
-            // If we have a recent context (within last 30 seconds), use it
-            if (currentContext && (Date.now() - currentContext.timestamp < 30000)) {
-                return currentContext;
+            // If we have a recent valid context (within last 5 minutes), use it
+            // This makes context "sticky" across navigation
+            if (lastValidContext && (Date.now() - lastValidContext.timestamp < 300000)) {
+                return lastValidContext;
             }
 
             // Otherwise try to get fresh context from current controller
             if (action.currentController) {
                 updateContext(action.currentController);
+                if (lastValidContext) {
+                    return lastValidContext;
+                }
                 return currentContext;
             }
 
-            return null;
+            return lastValidContext || currentContext;
         }
 
         /**
