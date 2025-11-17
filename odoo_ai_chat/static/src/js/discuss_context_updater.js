@@ -78,15 +78,27 @@ const discussContextUpdaterService = {
 
         /**
          * Schedule a context update (debounced)
+         * If forceUpdate is true, call immediately without debouncing
          */
         function scheduleContextUpdate(forceUpdate = false) {
+            // If forcing update, call immediately without debouncing
+            if (forceUpdate) {
+                if (updateTimer) {
+                    clearTimeout(updateTimer);
+                    updateTimer = null;
+                }
+                updateAiChannelContext(true);
+                return;
+            }
+
+            // Otherwise debounce as usual
             if (updateTimer) {
                 clearTimeout(updateTimer);
             }
 
             // Wait 500ms before updating to avoid too many updates
             updateTimer = setTimeout(() => {
-                updateAiChannelContext(forceUpdate);
+                updateAiChannelContext(false);
             }, 500);
         }
 
