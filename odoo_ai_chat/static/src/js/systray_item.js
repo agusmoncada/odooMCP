@@ -10,18 +10,37 @@ import { useService } from "@web/core/utils/hooks";
  */
 export class AIChatSystrayItem extends Component {
     setup() {
-        this.aiChat = useService("ai_chat");
-        this.action = useService("action");
+        this.rpc = useService("rpc");
+        this.messaging = useService("messaging");
         // Ensure typing indicator service starts (for Discuss AI chat)
         useService("ai_chat_typing_indicator");
     }
 
     /**
-     * Open AI Chat in Discuss
+     * Open AI Chat in bottom chat window
      */
     async openChat() {
-        // Redirect to controller that opens or creates the AI Assistant channel in Discuss
-        window.location.href = '/ai_chat/open_discuss_channel';
+        try {
+            // Get or create the AI channel
+            const result = await this.rpc("/ai_chat/get_channel_id", {});
+
+            if (result.success && result.channel_id) {
+                // Wait for messaging to be ready
+                await this.messaging.isReady;
+
+                // Get the thread (channel) from the messaging store
+                const messaging = this.messaging.get();
+                const thread = messaging.store.Thread.insert({
+                    id: result.channel_id,
+                    model: 'mail.channel',
+                });
+
+                // Open the chat window at the bottom
+                thread.open();
+            }
+        } catch (error) {
+            console.error("Error opening AI chat:", error);
+        }
     }
 }
 
