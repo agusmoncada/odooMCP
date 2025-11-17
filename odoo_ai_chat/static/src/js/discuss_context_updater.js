@@ -21,10 +21,24 @@ const discussContextUpdaterService = {
          */
         async function updateAiChannelContext() {
             try {
+                console.log("[AI Chat] updateAiChannelContext called");
                 const currentContext = ai_chat_context_tracker.getCurrentContext();
 
+                console.log("[AI Chat] Current context from tracker:", currentContext);
+
                 // Only update if context has changed and we have a valid context
-                if (!currentContext || !currentContext.model || !currentContext.active_id) {
+                if (!currentContext) {
+                    console.log("[AI Chat] No current context, skipping update");
+                    return;
+                }
+
+                if (!currentContext.model) {
+                    console.log("[AI Chat] Context missing model, skipping update");
+                    return;
+                }
+
+                if (!currentContext.active_id) {
+                    console.log("[AI Chat] Context missing active_id, skipping update");
                     return;
                 }
 
@@ -32,7 +46,10 @@ const discussContextUpdaterService = {
                 const contextKey = `${currentContext.model}-${currentContext.active_id}`;
                 const lastContextKey = lastContext ? `${lastContext.model}-${lastContext.active_id}` : null;
 
+                console.log("[AI Chat] Context keys - current:", contextKey, "last:", lastContextKey);
+
                 if (contextKey === lastContextKey) {
+                    console.log("[AI Chat] Context unchanged, skipping update");
                     return;
                 }
 
@@ -42,13 +59,19 @@ const discussContextUpdaterService = {
 
                 // Find the AI channel for the current user
                 // We'll call a backend method to update the context
-                await rpc("/ai_chat/update_channel_context", {
+                const result = await rpc("/ai_chat/update_channel_context", {
                     context: currentContext,
                 });
 
-                console.log("[AI Chat] AI channel context updated successfully");
+                console.log("[AI Chat] Update result:", result);
+
+                if (result.success) {
+                    console.log("[AI Chat] AI channel context updated successfully");
+                } else {
+                    console.error("[AI Chat] Failed to update context:", result.error);
+                }
             } catch (error) {
-                console.debug("[AI Chat] Could not update AI channel context:", error);
+                console.error("[AI Chat] Could not update AI channel context:", error);
             }
         }
 
