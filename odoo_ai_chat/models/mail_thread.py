@@ -48,16 +48,18 @@ class MailThread(models.AbstractModel):
         message_body = message.body or ''
 
         # Process AI response asynchronously
+        # Pass the author_id directly so we don't need to read the message in the async thread
+        mentioning_user_id = message.author_id.id if message.author_id else None
         thread = threading.Thread(
             target=self._process_ai_chatter_message_async,
-            args=(self.env.cr.dbname, self.env.uid, self._name, self.id, message_body, message.id)
+            args=(self.env.cr.dbname, self.env.uid, self._name, self.id, message_body, mentioning_user_id)
         )
         thread.daemon = True
         thread.start()
 
         return message
 
-    def _process_ai_chatter_message_async(self, dbname, uid, model_name, record_id, message_body, original_message_id):
+    def _process_ai_chatter_message_async(self, dbname, uid, model_name, record_id, message_body, mentioning_user_id):
         """Process AI chatter message in background thread with new cursor"""
         import odoo
         from odoo import api
@@ -82,11 +84,12 @@ class MailThread(models.AbstractModel):
                     _logger.error("AI bot not found")
                     return
 
-                # Get the original message to find who mentioned us
-                original_message = env['mail.message'].browse(original_message_id)
+                # Get the user who mentioned us (passed directly to avoid transaction issues)
                 mentioning_user_partner = None
-                if original_message.exists() and original_message.author_id:
-                    mentioning_user_partner = original_message.author_id
+                if mentioning_user_id:
+                    mentioning_user_partner = env['res.partner'].browse(mentioning_user_id)
+                    if not mentioning_user_partner.exists():
+                        mentioning_user_partner = None
 
                 # Get AI configuration
                 config_params = env['ir.config_parameter'].sudo()
@@ -245,7 +248,7 @@ class MailThread(models.AbstractModel):
                         author_id=ai_bot.id,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',
-                        parent_id=original_message_id,  # Reply to the @mention
+                        # Don't use parent_id - causes FK constraint error with async cursor
                         partner_ids=partner_ids  # Notify the user who mentioned us
                     )
                     env.cr.commit()
