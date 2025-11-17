@@ -10,8 +10,8 @@ import { registry } from "@web/core/registry";
 const typingIndicatorService = {
     dependencies: ["bus_service"],
 
-    start(env, { bus_service }) {
-        console.log("[AI Chat] Typing indicator service started");
+    async start(env, { bus_service }) {
+        console.log("[AI Chat] Typing indicator service started - Version 2");
 
         // Track typing status per channel
         const typingStatus = new Map();
