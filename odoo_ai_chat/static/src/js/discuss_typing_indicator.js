@@ -25,35 +25,32 @@ const typingIndicatorService = {
             }
 
             for (const notification of notifications) {
-                // Validate notification is an array before destructuring
-                if (!Array.isArray(notification) || notification.length < 2) {
-                    console.warn("[AI Chat] Invalid notification format:", notification);
+                // Odoo 16 notification format: {type: "...", payload: {...}}
+                if (!notification || typeof notification !== 'object') {
                     continue;
                 }
 
-                const [channel, message] = notification;
+                const notificationType = notification.type;
+                const payload = notification.payload;
 
                 console.log("[AI Chat] Bus notification received:", {
-                    channel,
-                    message,
-                    type: typeof message,
+                    type: notificationType,
+                    payload: payload,
                 });
 
                 // Handle typing_status notifications
-                if (channel && channel.toString().includes('mail.channel')) {
-                    // Check if message has typing status
-                    if (message && typeof message === 'object') {
-                        // Log the full message structure
-                        console.log("[AI Chat] Channel notification payload:", JSON.stringify(message, null, 2));
+                if (notificationType === 'mail.channel.partner/typing_status' ||
+                    notificationType === 'mail.channel.member/typing_status') {
 
-                        // Handle different notification formats
-                        const payload = message.payload || message;
+                    console.log("[AI Chat] Typing notification payload:", payload);
 
-                        if (payload.is_typing !== undefined) {
-                            const channelId = payload.channel_id;
-                            const partnerId = payload.partner_id;
-                            const isTyping = payload.is_typing;
+                    if (payload) {
+                        // Extract typing info from payload
+                        const channelId = payload.channel_id || payload.channel?.id;
+                        const partnerId = payload.partner_id || payload.persona?.partner?.id;
+                        const isTyping = payload.is_typing || payload.isTyping;
 
+                        if (channelId !== undefined && isTyping !== undefined) {
                             console.log(`[AI Chat] Typing status: Partner ${partnerId} ${isTyping ? 'started' : 'stopped'} typing in channel ${channelId}`);
 
                             // Update typing status
@@ -65,7 +62,8 @@ const typingIndicatorService = {
 
                                 // Auto-clear after 10 seconds
                                 setTimeout(() => {
-                                    if (typingStatus.get(channelId)?.timestamp === typingStatus.get(channelId)?.timestamp) {
+                                    const current = typingStatus.get(channelId);
+                                    if (current && current.timestamp === typingStatus.get(channelId)?.timestamp) {
                                         typingStatus.delete(channelId);
                                         hideTypingIndicator(channelId);
                                     }
@@ -76,11 +74,6 @@ const typingIndicatorService = {
                             }
                         }
                     }
-                }
-
-                // Also check for the specific notification type
-                if (channel === 'mail.channel.partner/typing_status') {
-                    console.log("[AI Chat] Typing notification received:", message);
                 }
             }
         });
