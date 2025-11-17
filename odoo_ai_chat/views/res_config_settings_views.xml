@@ -9,6 +9,17 @@
             <xpath expr="//div[hasclass('settings')]" position="inside">
                 <div class="app_settings_block" data-string="AI Chat" string="AI Chat" data-key="odoo_ai_chat">
                     <h2>AI Chat Assistant</h2>
+                    
+                    <!-- Cost Optimization Notice -->
+                    <div class="alert alert-info" role="alert">
+                        <strong>💡 Cost Optimization Tips:</strong>
+                        <ul class="mb-0">
+                            <li>Use <strong>Claude 3 Haiku</strong> or <strong>GPT-3.5 Turbo</strong> for budget-friendly performance</li>
+                            <li>Set <strong>Max Tokens to 800</strong> or lower for shorter responses</li>
+                            <li>Limit <strong>History Messages to 20</strong> to reduce context costs</li>
+                            <li>Keep <strong>System Prompt concise</strong> to save on repeated tokens</li>
+                        </ul>
+                    </div>
 
                     <div class="row mt16 o_settings_container">
                         <!-- OpenRouter Configuration -->
@@ -88,7 +99,24 @@
                                         <field name="openrouter_max_tokens"/>
                                     </div>
                                     <div class="text-muted">
-                                        Maximum tokens to generate in responses
+                                        Maximum tokens to generate in responses (lower = less cost)
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Max History Messages -->
+                        <div class="col-12 col-lg-6 o_setting_box">
+                            <div class="o_setting_left_pane">
+                            </div>
+                            <div class="o_setting_right_pane">
+                                <div class="content-group">
+                                    <div class="row mt16">
+                                        <label for="max_history_messages" string="Max History Messages" class="col-3 col-lg-3 o_light_label"/>
+                                        <field name="max_history_messages"/>
+                                    </div>
+                                    <div class="text-muted">
+                                        Limit conversation history to save on token costs (0 = unlimited)
                                     </div>
                                 </div>
                             </div>

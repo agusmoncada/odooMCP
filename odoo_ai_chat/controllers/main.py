@@ -97,8 +97,8 @@ class AIChatController(http.Controller):
                     'content': system_prompt
                 })
 
-            # Add conversation history
-            messages.extend(session.get_messages_for_api())
+            # Add conversation history (with limit)
+            messages.extend(session.get_messages_for_api(config['max_history_messages']))
 
             # Get MCP tools if enabled
             tools = []
@@ -202,7 +202,7 @@ class AIChatController(http.Controller):
         tools = mcp_registry.list_tools()
 
         graph_data = None
-        max_iterations = 20  # Prevent infinite loops (allows batching up to 20 operations)
+        max_iterations = 10  # Prevent infinite loops (reduced from 20 to save costs)
         iteration = 0
 
         # Loop to handle multiple rounds of tool calls

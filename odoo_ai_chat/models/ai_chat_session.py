@@ -242,7 +242,7 @@ class AIChatSession(models.Model):
 
         return channel
 
-    def get_messages_for_api(self):
+    def get_messages_for_api(self, max_messages=None):
         """Get messages formatted for AI API"""
         import json
         import logging
@@ -251,15 +251,24 @@ class AIChatSession(models.Model):
         self.ensure_one()
         messages = []
 
+        # Apply message limit if specified
+        chat_messages = self.chat_message_ids.sorted('create_date')
+        if max_messages and max_messages > 0:
+            # Keep only the most recent messages
+            total_messages = len(chat_messages)
+            if total_messages > max_messages:
+                chat_messages = chat_messages[-max_messages:]
+                _logger.info(f"Limited conversation history to {max_messages} messages (was {total_messages})")
+
         # PASS 1: Track which tool_call_ids have responses
         tool_call_ids_with_responses = set()
-        for msg in self.chat_message_ids:
+        for msg in chat_messages:
             if msg.role == 'tool' and msg.tool_call_id:
                 tool_call_ids_with_responses.add(msg.tool_call_id)
 
         # PASS 2: Build valid tool_call_ids (only from assistant messages that will be included)
         valid_tool_call_ids = set()
-        for msg in self.chat_message_ids.sorted('create_date'):
+        for msg in chat_messages:
             if msg.role == 'assistant' and msg.tool_calls:
                 try:
                     tool_calls_data = json.loads(msg.tool_calls)
@@ -279,7 +288,7 @@ class AIChatSession(models.Model):
                     pass
 
         # PASS 3: Build messages array, only including tool results with valid tool_call_ids
-        for msg in self.chat_message_ids.sorted('create_date'):
+        for msg in chat_messages:
             # Skip tool messages without proper tool_call_id (backward compatibility)
             if msg.role == 'tool' and not msg.tool_call_id:
                 _logger.warning(f"Skipping tool message {msg.id} without tool_call_id")

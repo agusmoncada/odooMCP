@@ -98,7 +98,7 @@ class OpenRouterProvider:
         self,
         messages: List[Dict[str, str]],
         mcp_tools: List[Dict],
-        max_iterations: int = 5
+        max_iterations: int = 3
     ) -> Dict[str, Any]:
         """
         Chat with MCP tool support, handling multiple tool calls

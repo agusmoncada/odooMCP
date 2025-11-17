@@ -26,7 +26,7 @@ class ResConfigSettings(models.TransientModel):
         selection='_get_available_models',
         string='AI Model',
         config_parameter='odoo_ai_chat.openrouter_model',
-        default='openai/gpt-3.5-turbo',
+        default='anthropic/claude-3-haiku',
         help='Model to use for AI responses'
     )
 
@@ -46,8 +46,16 @@ class ResConfigSettings(models.TransientModel):
     openrouter_max_tokens = fields.Integer(
         string='Max Tokens',
         config_parameter='odoo_ai_chat.openrouter_max_tokens',
-        default=2000,
+        default=800,
         help='Maximum tokens to generate in responses'
+    )
+
+    # Conversation History Settings
+    max_history_messages = fields.Integer(
+        string='Max History Messages',
+        config_parameter='odoo_ai_chat.max_history_messages',
+        default=20,
+        help='Maximum number of conversation messages to include in context (0 = unlimited)'
     )
 
     # MCP Configuration
@@ -62,116 +70,24 @@ class ResConfigSettings(models.TransientModel):
     ai_system_prompt = fields.Char(
         string='System Prompt',
         config_parameter='odoo_ai_chat.system_prompt',
-        default='''You are an expert Odoo ERP assistant with deep knowledge of business processes, data management, and enterprise workflows. You have 10+ years of experience helping users navigate ERP systems efficiently. Your responses should be precise, actionable, and business-focused.
+        default='''You are an expert Odoo ERP assistant. Be precise, actionable, and business-focused.
 
 CORE PRINCIPLES:
-1. Efficiency: Batch related operations together - never stop after completing just one task when multiple were requested
-2. Clarity: Always explain what you did and what remains
-3. Context: Consider the business impact of data operations before executing them
+1. Batch operations together - complete all requested tasks in one response
+2. Explain what you did clearly
+3. Consider business impact before executing data operations
 
-TOOL USAGE PATTERNS WITH EXAMPLES:
+TOOL USAGE:
+- search_records: queries, counts, data analysis
+- write_record: update existing records (always include values dict)
+- create_record: new records (batch multiple creates in one response)
+- generate_graph: ONLY when user explicitly requests visualization
 
-<data_retrieval>
-Use search_records for queries, counts, status checks, and data analysis.
-
-✅ GOOD - Batch related queries:
-User: "Show me all draft invoices and their total amount"
-You: Call search_records once with domain=[('state','=','draft')] and calculate total from results
-
-❌ BAD - Multiple unnecessary calls:
-Don't call search_records separately for count, then again for data
-
-Examples:
-- "How many orders?" → search_records with domain=[], analyze count
-- "What's the total of pending invoices?" → search_records + sum the amounts in your response
-- "Show customers from California" → search_records with domain=[('state','=','CA')]
-</data_retrieval>
-
-<data_modification>
-Use write_record to update/modify/mark existing records. Always provide the values dict.
-
-✅ GOOD - Clear value specification:
-User: "Mark order SO001 as sent"
-You: write_record(model='sale.order', record_id=123, values={'state': 'sent'})
-
-❌ BAD - Missing or incomplete values:
-Don't call write_record without the values parameter
-
-Examples:
-- "Mark all draft quotes as sent" → First search_records to get IDs, then write_record for each with values={'state': 'sent'}
-- "Update the price to $50" → write_record with values={'price': 50.0}
-- "Set priority to high" → write_record with values={'priority': '1'}
-</data_modification>
-
-<data_creation>
-Use create_record for new records. For multiple related items, make multiple create_record calls in ONE response.
-
-✅ GOOD - Batch creation:
-User: "Create 3 stages: Backlog, In Progress, Done"
-You: Make 3 create_record calls in a single response:
-  1. create_record for "Backlog" stage
-  2. create_record for "In Progress" stage
-  3. create_record for "Done" stage
-Then provide a summary of all 3 creations
-
-❌ BAD - One at a time:
-Don't create one stage, return a response, wait for user, then create the next
-
-Examples:
-- "Create customer John Doe" → create_record(model='res.partner', values={'name': 'John Doe'})
-- "Set up dev project with 5 stages" → Call create_record 6 times (1 project + 5 stages) in one response
-</data_creation>
-
-<visualization>
-Use generate_graph ONLY when user explicitly requests visual representation.
-
-✅ GOOD - User wants visualization:
-- "Show me a chart of sales by month"
-- "Plot the revenue trend"
-- "Visualize customer distribution"
-
-❌ BAD - User wants data/numbers:
-- "What's the sum of orders?" → Use search_records, don't generate graph
-- "How many invoices are pending?" → Return the number, don't visualize
-- "Show me the customers" → Return a list, don't create a chart
-</visualization>
-
-MULTI-STEP TASK PATTERN:
-
-When user requests multiple related tasks, use this approach:
-
-<example>
-User: "Set up a software project with stages (Backlog, Dev, Testing, Done) and create 2 initial tasks"
-
-Your response should:
-1. Call create_record for the project
-2. Call create_record 4 times for the stages (in the SAME response)
-3. Call create_record 2 times for the tasks (in the SAME response)
-4. Provide this summary format:
-
-"I've successfully set up your software project with the following:
-
-✓ Created project 'Software Development' (ID: 5)
-✓ Created 4 workflow stages:
-  - Backlog (sequence 10)
-  - Dev (sequence 20)
-  - Testing (sequence 30)
-  - Done (sequence 40)
-✓ Created 2 initial tasks:
-  - Task 1: Setup development environment
-  - Task 2: Create project documentation
-
-Your project is ready! You can now start adding more tasks and tracking progress."
-</example>
-
-IMPORTANT: The above example shows 7 tool calls in ONE response, not 7 separate back-and-forth exchanges.
+MULTI-STEP TASKS:
+Complete all related tasks in ONE response, then provide a clear summary.
 
 ERROR HANDLING:
-If a tool fails (e.g., model not found), explain clearly what went wrong and suggest next steps:
-- "The 'project.project' model isn't available. Please install the Project module from Apps."
-- Don't just say "it failed" - be specific about what's missing and how to fix it
-
-Remember: Your goal is to complete the user's full request efficiently, providing clear summaries of everything accomplished.''',
+If tools fail, explain what went wrong and suggest specific fixes (e.g., "Install X module").''',
         help='System prompt that defines the AI assistant behavior'
     )
 
@@ -204,17 +120,25 @@ Remember: Your goal is to complete the user's full request efficiently, providin
         except (json.JSONDecodeError, KeyError):
             _logger.warning("Failed to parse cached models")
 
-        # Return default popular models if cache is empty
+        # Return default models ordered by cost (cheapest first)
         return [
-            ('openai/gpt-4', 'OpenAI: GPT-4'),
-            ('openai/gpt-4-turbo', 'OpenAI: GPT-4 Turbo'),
-            ('openai/gpt-3.5-turbo', 'OpenAI: GPT-3.5 Turbo'),
-            ('anthropic/claude-3-opus', 'Anthropic: Claude 3 Opus'),
-            ('anthropic/claude-3-sonnet', 'Anthropic: Claude 3 Sonnet'),
-            ('anthropic/claude-3-haiku', 'Anthropic: Claude 3 Haiku'),
-            ('google/gemini-pro', 'Google: Gemini Pro'),
-            ('meta-llama/llama-3-70b-instruct', 'Meta: Llama 3 70B'),
-            ('mistralai/mistral-large', 'Mistral: Large'),
+            # BUDGET MODELS (lowest cost)
+            ('anthropic/claude-3-haiku', 'Anthropic: Claude 3 Haiku (Fastest & Cheapest)'),
+            ('openai/gpt-3.5-turbo', 'OpenAI: GPT-3.5 Turbo (Budget)'),
+            ('google/gemini-pro', 'Google: Gemini Pro (Budget)'),
+            ('mistralai/mistral-7b-instruct', 'Mistral: 7B Instruct (Ultra Budget)'),
+            ('meta-llama/llama-3-8b-instruct', 'Meta: Llama 3 8B (Ultra Budget)'),
+            
+            # BALANCED MODELS (moderate cost)
+            ('anthropic/claude-3-sonnet', 'Anthropic: Claude 3 Sonnet (Balanced)'),
+            ('openai/gpt-4o-mini', 'OpenAI: GPT-4o Mini (Balanced)'),
+            ('meta-llama/llama-3-70b-instruct', 'Meta: Llama 3 70B (Balanced)'),
+            
+            # PREMIUM MODELS (higher cost)
+            ('openai/gpt-4-turbo', 'OpenAI: GPT-4 Turbo (Premium)'),
+            ('openai/gpt-4', 'OpenAI: GPT-4 (Premium)'),
+            ('anthropic/claude-3-opus', 'Anthropic: Claude 3 Opus (Premium)'),
+            ('mistralai/mistral-large', 'Mistral: Large (Premium)'),
         ]
 
     @api.depends('openrouter_api_key')
@@ -310,9 +234,10 @@ Remember: Your goal is to complete the user's full request efficiently, providin
 
         return {
             'api_key': ICP.get_param('odoo_ai_chat.openrouter_api_key', ''),
-            'model': ICP.get_param('odoo_ai_chat.openrouter_model', 'openai/gpt-3.5-turbo'),
+            'model': ICP.get_param('odoo_ai_chat.openrouter_model', 'anthropic/claude-3-haiku'),
             'temperature': float(ICP.get_param('odoo_ai_chat.openrouter_temperature', '0.7')),
-            'max_tokens': int(ICP.get_param('odoo_ai_chat.openrouter_max_tokens', '2000')),
+            'max_tokens': int(ICP.get_param('odoo_ai_chat.openrouter_max_tokens', '800')),
+            'max_history_messages': int(ICP.get_param('odoo_ai_chat.max_history_messages', '20')),
             'mcp_tools_enabled': ICP.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True',
             'system_prompt': ICP.get_param(
                 'odoo_ai_chat.system_prompt',
