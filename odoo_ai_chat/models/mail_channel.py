@@ -27,6 +27,44 @@ class MailChannel(models.Model):
         help='Linked AI chat session for this channel'
     )
 
+    def _send_typing_notification(self, is_typing, ai_bot=None):
+        """
+        Helper method to send typing notifications to all channel members
+
+        :param is_typing: Boolean indicating if AI is typing
+        :param ai_bot: res.partner record for AI bot (optional, will be looked up if not provided)
+        """
+        try:
+            if not ai_bot:
+                ai_bot = self.env['res.partner'].sudo().search([
+                    ('email', '=', 'ai.assistant@odoo.local')
+                ], limit=1)
+
+            if not ai_bot:
+                return
+
+            # Get all channel members (partners)
+            member_partners = self.channel_partner_ids
+
+            # Send to each channel member
+            for partner in member_partners:
+                self.env['bus.bus']._sendone(partner, 'mail.channel.partner/typing_status', {
+                    'channel_id': self.id,
+                    'partner_id': ai_bot.id,
+                    'is_typing': is_typing,
+                })
+
+            # Also send to the channel itself for good measure
+            self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
+                'channel_id': self.id,
+                'partner_id': ai_bot.id,
+                'is_typing': is_typing,
+            })
+
+            _logger.info(f"Typing notification {'started' if is_typing else 'stopped'} for channel {self.id} to {len(member_partners)} members")
+        except Exception as e:
+            _logger.warning(f"Could not send typing notification: {e}")
+
     @api.model
     def create(self, vals):
         """Mark channels with AI bot as AI channels"""
@@ -225,7 +263,17 @@ class MailChannel(models.Model):
 
                 if ai_bot:
                     # Stop typing indicator
+                    # Note: Can't use helper method here because of different env context
                     try:
+                        # Send to all channel members
+                        member_partners = channel.channel_partner_ids
+                        for partner in member_partners:
+                            env['bus.bus']._sendone(partner, 'mail.channel.partner/typing_status', {
+                                'channel_id': channel.id,
+                                'partner_id': ai_bot.id,
+                                'is_typing': False,
+                            })
+                        # Also send to channel itself
                         env['bus.bus']._sendone(channel, 'mail.channel.partner/typing_status', {
                             'channel_id': channel.id,
                             'partner_id': ai_bot.id,
@@ -266,17 +314,9 @@ class MailChannel(models.Model):
 
             if ai_bot:
                 # Send typing indicator IMMEDIATELY and commit so user sees it right away
-                try:
-                    self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
-                        'channel_id': self.id,
-                        'partner_id': ai_bot.id,
-                        'is_typing': True,
-                    })
-                    # CRITICAL: Commit immediately so typing indicator appears in UI
-                    self.env.cr.commit()
-                    _logger.info(f"Typing indicator started and committed for channel {self.id}")
-                except Exception as e:
-                    _logger.warning(f"Could not send typing notification: {e}")
+                self._send_typing_notification(True, ai_bot)
+                # CRITICAL: Commit immediately so typing indicator appears in UI
+                self.env.cr.commit()
 
             # Get or create AI session for this channel
             if not self.ai_session_id:
@@ -407,14 +447,7 @@ class MailChannel(models.Model):
 
                     if ai_bot:
                         # Stop typing indicator
-                        try:
-                            self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
-                                'channel_id': self.id,
-                                'partner_id': ai_bot.id,
-                                'is_typing': False,
-                            })
-                        except Exception:
-                            pass
+                        self._send_typing_notification(False, ai_bot)
 
                         # Format the message body for proper display in Discuss
                         formatted_body = self._format_ai_message_body(content)
@@ -427,6 +460,16 @@ class MailChannel(models.Model):
                         # Commit immediately so message appears in UI without delay
                         self.env.cr.commit()
                         _logger.info(f"Posted AI message {posted_message.id} to channel {self.id} and committed")
+
+                        # CRITICAL: Send bus notification manually
+                        # In async threads, Odoo's automatic notifications don't work
+                        # We need to manually notify the frontend about the new message
+                        try:
+                            self._broadcast([posted_message.id])
+                            self.env.cr.commit()  # Commit the bus notification
+                            _logger.info(f"Sent bus notification for message {posted_message.id}")
+                        except Exception as bus_error:
+                            _logger.warning(f"Could not send bus notification: {bus_error}")
 
         except Exception as e:
             _logger.error(f"Error processing AI message: {e}", exc_info=True)
@@ -459,14 +502,7 @@ class MailChannel(models.Model):
 
                 if ai_bot:
                     # Stop typing indicator on error
-                    try:
-                        self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
-                            'channel_id': self.id,
-                            'partner_id': ai_bot.id,
-                            'is_typing': False,
-                        })
-                    except Exception:
-                        pass
+                    self._send_typing_notification(False, ai_bot)
 
                     error_message = f"Sorry, I encountered an error: {str(e)}"
                     formatted_error = self._format_ai_message_body(error_message)
@@ -1008,14 +1044,7 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
         if ai_bot:
             # Stop typing indicator
-            try:
-                self.env['bus.bus']._sendone(self, 'mail.channel.partner/typing_status', {
-                    'channel_id': self.id,
-                    'partner_id': ai_bot.id,
-                    'is_typing': False,
-                })
-            except Exception:
-                pass
+            self._send_typing_notification(False, ai_bot)
 
             if current_content:
                 # Format body with graph if available
@@ -1035,5 +1064,13 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 # Commit immediately so message appears in UI without delay
                 self.env.cr.commit()
                 _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations and committed")
-                # sent BEFORE the transaction was committed, causing a race condition where
-                # Discuss received the notification but couldn't fetch the message yet.
+
+                # CRITICAL: Send bus notification manually
+                # In async threads, Odoo's automatic notifications don't work
+                # We need to manually notify the frontend about the new message
+                try:
+                    self._broadcast([posted_message.id])
+                    self.env.cr.commit()  # Commit the bus notification
+                    _logger.info(f"Sent bus notification for message {posted_message.id}")
+                except Exception as bus_error:
+                    _logger.warning(f"Could not send bus notification: {bus_error}")

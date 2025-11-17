@@ -36,6 +36,7 @@
             'odoo_ai_chat/static/src/js/ai_chat_service.js',
             'odoo_ai_chat/static/src/js/ai_chat_widget.js',
             'odoo_ai_chat/static/src/js/systray_item.js',
+            'odoo_ai_chat/static/src/js/discuss_typing_indicator.js',
             # CSS
             'odoo_ai_chat/static/src/css/ai_chat.css',
             # Templates
