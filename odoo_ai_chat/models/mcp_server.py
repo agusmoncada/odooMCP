@@ -388,15 +388,20 @@ class MCPServer:
 
         # Add view context variables if available
         if view_context:
+            _logger.info(f"[Template Resolution] View context provided: {view_context}")
             # Check if context is recent (within last 5 minutes)
             import time
             timestamp = view_context.get('timestamp', 0)
             current_time_ms = time.time() * 1000
             age_ms = current_time_ms - timestamp if timestamp else 999999
 
+            _logger.info(f"[Template Resolution] Context age: {age_ms / 1000:.1f}s (max: 300s)")
+
             if timestamp and age_ms <= 300000:  # 5 minutes
                 model = view_context.get('model')
                 active_id = view_context.get('active_id')
+
+                _logger.info(f"[Template Resolution] Context is fresh: model={model}, active_id={active_id}")
 
                 if active_id:
                     templates['res_id'] = active_id
@@ -405,6 +410,7 @@ class MCPServer:
                     # If viewing a partner, make partner_id available
                     if model == 'res.partner':
                         templates['partner_id'] = active_id
+                        _logger.info(f"[Template Resolution] Set partner_id={active_id} from res.partner context")
                     # If viewing other records, try to get their partner_id
                     elif model and active_id:
                         try:
@@ -412,8 +418,13 @@ class MCPServer:
                             if record.exists() and hasattr(record, 'partner_id'):
                                 if record.partner_id:
                                     templates['partner_id'] = record.partner_id.id
+                                    _logger.info(f"[Template Resolution] Extracted partner_id={record.partner_id.id} from {model} record")
                         except Exception as e:
                             _logger.debug(f"Could not extract partner_id from {model} record: {e}")
+            else:
+                _logger.warning(f"[Template Resolution] Context is stale or missing timestamp")
+        else:
+            _logger.info(f"[Template Resolution] No view context provided to template resolver")
 
         # Common activity type IDs (if they exist)
         try:
@@ -424,6 +435,8 @@ class MCPServer:
                 templates['activity_type_id_for_call'] = call_activity.id
         except Exception:
             pass
+
+        _logger.info(f"[Template Resolution] Available template variables: {list(templates.keys())}")
 
         def resolve_value(value):
             """Recursively resolve template variables in value"""
@@ -486,8 +499,10 @@ class MCPServer:
 
             # Resolve any template variables in values
             try:
+                _logger.info(f"[create_record] Before template resolution, values: {values}")
+                _logger.info(f"[create_record] View context available: {bool(view_context)}")
                 values = self._resolve_template_variables(values, view_context=view_context)
-                _logger.info(f"Resolved template variables, values: {values}")
+                _logger.info(f"[create_record] After template resolution, values: {values}")
             except ValueError as e:
                 return {
                     'success': False,
