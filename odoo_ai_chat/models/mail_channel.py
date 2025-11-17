@@ -679,49 +679,67 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         except Exception as e:
             _logger.error(f"Error during conversation summarization: {e}")
 
-        # Fallback: Aggressive truncation with complete sequence validation
+        # Fallback: Two-pass validation to ensure complete tool sequences
         # Start with last 20 messages for more context
         truncated = messages[-20:] if len(messages) > 20 else messages
 
-        # COMPLETE MESSAGE SEQUENCE VALIDATOR
-        # This ensures the entire conversation is valid for the API
+        # PASS 1: Build sets of available tool_use and tool_result IDs
+        tool_use_ids = set()  # IDs requested by assistant messages
+        tool_result_ids = set()  # IDs with results from tool messages
+
+        for msg in truncated:
+            # Collect tool_use IDs from assistant messages
+            if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                for tc in msg.get('tool_calls', []):
+                    tool_use_ids.add(tc.get('id'))
+
+            # Collect tool_result IDs from tool messages
+            elif msg.get('role') == 'tool':
+                tool_call_id = msg.get('tool_call_id')
+                if tool_call_id:
+                    tool_result_ids.add(tool_call_id)
+
+        _logger.info(f"Pass 1 complete: {len(tool_use_ids)} tool_uses, {len(tool_result_ids)} tool_results")
+
+        # PASS 2: Build validated message list with complete sequences only
         validated = []
-        tool_use_ids = set()  # Track which tool_use IDs we've seen
 
         for i, msg in enumerate(truncated):
             role = msg.get('role')
 
-            # Rule 1: Skip orphaned tool messages (no preceding tool_use)
-            if role == 'tool':
-                tool_call_id = msg.get('tool_call_id')
-                if tool_call_id not in tool_use_ids:
-                    _logger.info(f"Skipping orphaned tool message at index {i} (tool_call_id: {tool_call_id})")
+            # Rule 1: Skip assistant+tool_calls if ANY of its tools don't have results
+            if role == 'assistant' and msg.get('tool_calls'):
+                tool_calls = msg.get('tool_calls', [])
+                all_have_results = all(tc.get('id') in tool_result_ids for tc in tool_calls)
+
+                if not all_have_results:
+                    missing = [tc.get('id') for tc in tool_calls if tc.get('id') not in tool_result_ids]
+                    _logger.info(f"Skipping assistant at index {i} - missing tool_results for: {missing}")
                     continue
 
-            # Rule 2: Skip consecutive assistant messages (keep only last one)
+            # Rule 2: Skip tool_result if its tool_use doesn't exist
+            elif role == 'tool':
+                tool_call_id = msg.get('tool_call_id')
+                if tool_call_id not in tool_use_ids:
+                    _logger.info(f"Skipping orphaned tool_result at index {i} (tool_call_id: {tool_call_id})")
+                    continue
+
+            # Rule 3: Skip consecutive assistant messages (keep only last one)
             if role == 'assistant' and validated and validated[-1].get('role') == 'assistant':
                 _logger.info(f"Replacing duplicate assistant at index {i}")
-                validated.pop()  # Remove previous assistant
-                # Fall through to add this one
-
-            # Rule 3: Track tool_use IDs from assistant messages
-            if role == 'assistant' and msg.get('tool_calls'):
-                for tc in msg.get('tool_calls', []):
-                    tool_use_ids.add(tc.get('id'))
-
-            # Rule 4: Remove assistant+tool_calls from end if no tool results follow
-            # We'll handle this after the loop
+                validated.pop()
 
             validated.append(msg)
 
-        # Post-processing: Remove incomplete tool sequences from end
+        # Post-processing cleanup
+        # Remove any trailing incomplete sequences (shouldn't happen now but defensive)
         while validated and validated[-1].get('role') == 'assistant' and validated[-1].get('tool_calls'):
             _logger.info(f"Removing incomplete assistant+tool_calls from end")
             validated.pop()
 
-        # Final check: Remove leading tool messages (shouldn't happen but defensive)
+        # Remove any leading tool messages (shouldn't happen now but defensive)
         while validated and validated[0].get('role') == 'tool':
-            _logger.info(f"Removing leading tool message")
+            _logger.info(f"Removing leading tool_result")
             validated.pop(0)
 
         # Ensure we have at least one user message
