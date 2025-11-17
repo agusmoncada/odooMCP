@@ -320,6 +320,10 @@ class AIChatSession(models.Model):
                             missing_ids = [tc.get('tool_call_id') for tc in tool_calls_data
                                          if tc.get('tool_call_id') not in tool_call_ids_with_responses]
                             _logger.warning(f"Skipping assistant message {msg.id} with incomplete tool calls. Missing responses for: {missing_ids}")
+                            # Also remove the orphaned tool_call_ids from valid set
+                            for tc in tool_calls_data:
+                                if tc.get('tool_call_id') in valid_tool_call_ids:
+                                    valid_tool_call_ids.discard(tc.get('tool_call_id'))
                             continue
 
                         # Format tool calls for OpenAI API

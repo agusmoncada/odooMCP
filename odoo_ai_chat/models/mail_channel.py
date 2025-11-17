@@ -582,6 +582,26 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         return prompt
 
+    def action_reset_ai_conversation(self):
+        """Reset the AI conversation by clearing corrupted message history"""
+        if hasattr(self, 'ai_session_id') and self.ai_session_id:
+            # Archive the old session with corrupted history
+            self.ai_session_id.write({'active': False})
+            
+            # Create a fresh session
+            new_session = self.env['ai.chat.session'].create({
+                'name': 'AI Assistant Chat (Reset)',
+                'user_id': self.env.user.id,
+                'channel_id': self.id,
+            })
+            self.ai_session_id = new_session.id
+            
+            # Post a system message about the reset
+            self.message_post(
+                body="<p><em>🔄 AI conversation has been reset due to technical issues. You can continue chatting normally.</em></p>",
+                message_type='notification'
+            )
+
     def update_view_context(self, context_data):
         """Update the current view context for this channel
 
@@ -631,8 +651,22 @@ Remember: Execute ALL required tool calls before providing a final text response
             String with formatted view context information, or None if no context
         """
         # Refresh the record to get latest context in case of transaction isolation
-        self.env.invalidate_all()
-        self.refresh()
+        try:
+            self.env.invalidate_all()
+            self.refresh()
+        except Exception as refresh_error:
+            _logger.warning(f"[AI Chat] Could not refresh context: {refresh_error}")
+            # Try to get context from database directly
+            self.env.cr.execute("""
+                SELECT current_view_context 
+                FROM mail_channel 
+                WHERE id = %s
+            """, (self.id,))
+            result = self.env.cr.fetchone()
+            if result and result[0]:
+                _logger.info(f"[AI Chat] Retrieved context from DB directly: {result[0][:100]}...")
+                # Temporarily set the context for this method
+                self.current_view_context = result[0]
         
         if not self.current_view_context:
             _logger.info(f"[AI Chat] No view context stored for channel {self.id}")
