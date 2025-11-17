@@ -102,12 +102,12 @@ class MCPServer:
             },
             'create_record': {
                 'name': 'create_record',
-                'description': 'Create a new record in an Odoo model',
+                'description': 'Create a new record in an Odoo model. IMPORTANT: values parameter must be a JSON object (dict), not a string. Supported template variables in values: {{uid}} (current user ID), {{today}}, {{tomorrow}}, {{next_week_monday}}, {{next_monday}}, {{now}}, {{activity_type_id_for_call}}. For other dynamic values like partner_id or res_id, extract them from context or ask the user.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
                         'model': {'type': 'string', 'description': 'The Odoo model name'},
-                        'values': {'type': 'object', 'description': 'Field values for the new record'}
+                        'values': {'type': 'object', 'description': 'Field values for the new record as a JSON object (not a string). You can use template variables like {{uid}}, {{today}}, {{next_week_monday}}, etc.'}
                     },
                     'required': ['model', 'values']
                 }
@@ -260,15 +260,15 @@ class MCPServer:
         """Return list of available MCP tools"""
         return list(self._tools.values())
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute an MCP tool with given arguments"""
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any], view_context: Optional[Dict] = None) -> Dict[str, Any]:
+        """Execute an MCP tool with given arguments and optional view context"""
         try:
             if tool_name == 'search_records':
                 return self._search_records(**arguments)
             elif tool_name == 'read_record':
                 return self._read_record(**arguments)
             elif tool_name == 'create_record':
-                return self._create_record(**arguments)
+                return self._create_record(view_context=view_context, **arguments)
             elif tool_name == 'write_record':
                 return self._write_record(**arguments)
             elif tool_name == 'get_model_fields':
@@ -352,9 +352,148 @@ class MCPServer:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def _create_record(self, model: str, values: Dict) -> Dict:
+    def _resolve_template_variables(self, values: Dict, view_context: Optional[Dict] = None) -> Dict:
+        """Resolve template variables in values dict
+
+        Supports variables like:
+        - {{uid}} -> current user ID
+        - {{today}} -> today's date
+        - {{next_week_monday}} -> next Monday's date
+        - {{now}} -> current datetime
+        - {{partner_id}} -> partner ID from view context (if available)
+        - {{res_id}} -> record ID from view context (if available)
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        # Calculate common date values
+        today = datetime.now().date()
+        now = datetime.now()
+
+        # Find next Monday
+        days_until_monday = (7 - today.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7  # If today is Monday, get next Monday
+        next_monday = today + timedelta(days=days_until_monday)
+
+        # Template variable mappings
+        templates = {
+            'uid': self.env.uid,
+            'today': today.isoformat(),
+            'tomorrow': (today + timedelta(days=1)).isoformat(),
+            'next_week_monday': next_monday.isoformat(),
+            'next_monday': next_monday.isoformat(),
+            'now': now.isoformat(),
+        }
+
+        # Add view context variables if available
+        if view_context:
+            # Check if context is recent (within last 5 minutes)
+            import time
+            timestamp = view_context.get('timestamp', 0)
+            current_time_ms = time.time() * 1000
+            age_ms = current_time_ms - timestamp if timestamp else 999999
+
+            if timestamp and age_ms <= 300000:  # 5 minutes
+                model = view_context.get('model')
+                active_id = view_context.get('active_id')
+
+                if active_id:
+                    templates['res_id'] = active_id
+                    templates['active_id'] = active_id
+
+                    # If viewing a partner, make partner_id available
+                    if model == 'res.partner':
+                        templates['partner_id'] = active_id
+                    # If viewing other records, try to get their partner_id
+                    elif model and active_id:
+                        try:
+                            record = self.env[model].sudo().browse(active_id)
+                            if record.exists() and hasattr(record, 'partner_id'):
+                                if record.partner_id:
+                                    templates['partner_id'] = record.partner_id.id
+                        except Exception as e:
+                            _logger.debug(f"Could not extract partner_id from {model} record: {e}")
+
+        # Common activity type IDs (if they exist)
+        try:
+            call_activity = self.env['mail.activity.type'].sudo().search([
+                '|', ('name', 'ilike', 'call'), ('name', 'ilike', 'phone')
+            ], limit=1)
+            if call_activity:
+                templates['activity_type_id_for_call'] = call_activity.id
+        except Exception:
+            pass
+
+        def resolve_value(value):
+            """Recursively resolve template variables in value"""
+            if isinstance(value, str):
+                # Check if entire string is a template variable
+                match = re.match(r'^\{\{(\w+)\}\}$', value)
+                if match:
+                    var_name = match.group(1)
+                    if var_name in templates:
+                        return templates[var_name]
+                    else:
+                        raise ValueError(f"Unknown template variable: {{{{{var_name}}}}}")
+
+                # Replace template variables within string
+                def replace_template(match):
+                    var_name = match.group(1)
+                    if var_name in templates:
+                        return str(templates[var_name])
+                    else:
+                        raise ValueError(f"Unknown template variable: {{{{{var_name}}}}}")
+
+                return re.sub(r'\{\{(\w+)\}\}', replace_template, value)
+
+            elif isinstance(value, dict):
+                return {k: resolve_value(v) for k, v in value.items()}
+
+            elif isinstance(value, list):
+                return [resolve_value(v) for v in value]
+
+            else:
+                return value
+
+        return resolve_value(values)
+
+    def _create_record(self, model: str, values, view_context: Optional[Dict] = None) -> Dict:
         """Create a new record"""
         try:
+            # Handle case where values is passed as a JSON string instead of dict
+            if isinstance(values, str):
+                _logger.info(f"values received as string, parsing JSON: {values[:100]}...")
+                try:
+                    # Preprocess: Quote unquoted template variables for valid JSON
+                    # This handles cases like: "user_id": {{uid}} -> "user_id": "{{uid}}"
+                    import re
+                    values = re.sub(r':\s*\{\{(\w+)\}\}', r': "{{\1}}"', values)
+                    _logger.info(f"After preprocessing template variables: {values[:100]}...")
+
+                    values = json.loads(values)
+                except json.JSONDecodeError as e:
+                    return {
+                        'success': False,
+                        'error': f"Invalid JSON in values parameter: {str(e)}. Values must be a valid JSON object."
+                    }
+
+            if not isinstance(values, dict):
+                return {
+                    'success': False,
+                    'error': f"values must be a dict/object, got {type(values).__name__}"
+                }
+
+            # Resolve any template variables in values
+            try:
+                values = self._resolve_template_variables(values, view_context=view_context)
+                _logger.info(f"Resolved template variables, values: {values}")
+            except ValueError as e:
+                return {
+                    'success': False,
+                    'error': f"Template variable error: {str(e)}"
+                }
+
             Model = self.env[model]
 
             # Special handling for mail.activity - need to convert res_model to res_model_id
@@ -383,6 +522,7 @@ class MCPServer:
                 'error': f"Model '{model}' not found. The required module may not be installed. Please check if the module is installed and activated."
             }
         except Exception as e:
+            _logger.exception(f"Error creating record in model {model}")
             return {'success': False, 'error': str(e)}
 
     def _write_record(self, model: str, record_id: int, values: Dict) -> Dict:
@@ -747,7 +887,7 @@ class MCPServerRegistry(models.AbstractModel):
         return server.list_tools()
 
     @api.model
-    def call_tool(self, tool_name, arguments):
-        """Call an MCP tool"""
+    def call_tool(self, tool_name, arguments, view_context=None):
+        """Call an MCP tool with optional view context"""
         server = self.get_server()
-        return server.call_tool(tool_name, arguments)
+        return server.call_tool(tool_name, arguments, view_context=view_context)
