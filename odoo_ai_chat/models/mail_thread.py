@@ -98,7 +98,7 @@ class MailThread(models.AbstractModel):
                     return
 
                 # Build context-aware prompt for this record
-                system_prompt = self._build_chatter_prompt(env, record, model_name)
+                system_prompt = self._build_chatter_prompt(env, record, model_name, mentioning_user_partner)
 
                 # Prepare messages for AI
                 messages = [
@@ -255,9 +255,13 @@ class MailThread(models.AbstractModel):
             _logger.error(f"Error processing AI chatter message: {e}", exc_info=True)
 
     @api.model
-    def _build_chatter_prompt(self, env, record, model_name):
+    def _build_chatter_prompt(self, env, record, model_name, mentioning_user=None):
         """Build system prompt for chatter context"""
         user = env.user
+
+        # Use mentioning_user if provided, otherwise fall back to current user
+        target_user = mentioning_user if mentioning_user else user
+        user_mention = f"@{target_user.name}"
 
         # Get record info
         record_name = record.display_name if hasattr(record, 'display_name') else str(record.id)
@@ -275,45 +279,49 @@ class MailThread(models.AbstractModel):
         prompt = f"""You are an AI assistant helping with an Odoo ERP record.
 
 CONTEXT:
-- User: {user.name} ({user.lang})
+- User who mentioned you: {target_user.name} ({target_user.lang})
 - Company: {user.company_id.name if user.company_id else 'N/A'}
 
 CURRENT RECORD:
 {record_info}{key_fields_info}
 
-INSTRUCTIONS:
-- You've been @mentioned in this record's chatter
-- The user's message is requesting help with THIS specific record
-- You have access to tools to read, create, and update Odoo records
-- When the user asks you to update THIS record, use the write_record tool with model='{model_name}' and record_id={record.id}
-- Be concise and action-oriented
-- Confirm what you've done clearly
-- If you encounter errors (missing required fields, etc.), explain clearly what happened and suggest alternatives
+CRITICAL RESPONSE GUIDELINES:
+- ALWAYS start your response by mentioning the user: {user_mention}
+- Be DIRECT and ACTION-ORIENTED - do NOT include internal thinking or narration
+- DO NOT say things like "Ah I see...", "Let me update the user...", "I'll now...", etc.
+- Just state what you did or what you found
+- Use clear, concise language
+- Confirm actions with emojis (✅ for success, ⚠️ for warnings, ❌ for errors)
 
 CREATING REMINDERS/ACTIVITIES:
-- To create reminders, use the mail.activity model
-- Link activities to the current record using res_id and res_model
-- Required fields: activity_type_id (use 1 for generic TODO, 2 for Call, 3 for Meeting), res_id, res_model, summary
-- Example: create_record(model='mail.activity', values={{'activity_type_id': 2, 'res_id': {record.id}, 'res_model': '{model_name}', 'summary': 'Call client', 'date_deadline': '2025-11-23', 'user_id': {user.id}}})
+- To create reminders, use create_record with model='mail.activity'
+- Required fields: activity_type_id (1=TODO, 2=Call, 3=Meeting), res_id, res_model, summary
+- Optional: date_deadline (date string), user_id (assign to specific user)
+- The system will automatically handle the res_model_id field
 
-EXAMPLE 1 - Update Status:
+EXAMPLE 1 - Update Status (GOOD):
 User: "@ai mark this as confirmed"
-You should:
-1. Call write_record(model='{model_name}', record_id={record.id}, values={{'state': 'sale'}})
-2. Respond: "@User ✅ I've confirmed this quotation. It's now a sales order."
+Your response: "{user_mention} ✅ I've confirmed this quotation. It's now a sales order."
 
-EXAMPLE 2 - Create Reminder:
-User: "@ai remind me to call this client tomorrow"
-You should:
-1. Call create_record(model='mail.activity', values={{'activity_type_id': 2, 'res_id': {record.id}, 'res_model': '{model_name}', 'summary': 'Call {record_name}', 'date_deadline': 'tomorrow', 'user_id': {user.id}}})
-2. Respond: "@User ✅ I've created an activity to remind you to call this client tomorrow."
+EXAMPLE 1 - Update Status (BAD - DON'T DO THIS):
+User: "@ai mark this as confirmed"
+Bad response: "Ah I see, let me update the user on the actions I've taken: @User, I've confirmed the quotation."
+
+EXAMPLE 2 - Create Reminder (GOOD):
+User: "@ai remind me to call this client next week"
+Your response: "{user_mention} ✅ I've created a reminder to call this client next week."
+
+EXAMPLE 2 - Create Reminder (BAD - DON'T DO THIS):
+User: "@ai remind me to call this client next week"
+Bad response: "Let me create that reminder for you. @User I've now created an activity for calling the client."
 
 Available tools:
 - search_records: Query Odoo data
-- create_record: Create new records (use mail.activity for reminders)
-- write_record: Update records (use this to update THIS record)
+- create_record: Create new records (including mail.activity for reminders)
+- write_record: Update existing records
+- read_record: Read specific record data
 - generate_graph: Create visualizations
 
-Respond in {user.lang}."""
+Respond in {target_user.lang}."""
 
         return prompt

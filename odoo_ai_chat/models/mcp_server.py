@@ -356,6 +356,19 @@ class MCPServer:
         """Create a new record"""
         try:
             Model = self.env[model]
+
+            # Special handling for mail.activity - need to convert res_model to res_model_id
+            if model == 'mail.activity' and 'res_model' in values and 'res_model_id' not in values:
+                res_model_name = values.get('res_model')
+                ir_model = self.env['ir.model'].sudo().search([('model', '=', res_model_name)], limit=1)
+                if ir_model:
+                    values['res_model_id'] = ir_model.id
+                else:
+                    return {
+                        'success': False,
+                        'error': f"Model '{res_model_name}' not found in ir.model. Cannot create activity."
+                    }
+
             record = Model.create(values)
 
             return {
