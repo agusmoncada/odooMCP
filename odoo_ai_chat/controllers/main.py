@@ -679,6 +679,24 @@ Only use a different language if the user explicitly requests it.
             _logger.exception("Error processing invoice")
             return {'success': False, 'error': str(e)}
 
+    @http.route('/ai_chat/get_channel_id', type='json', auth='user')
+    def get_channel_id(self, **kwargs):
+        """Get or create AI Assistant channel and return its ID"""
+        try:
+            # Get or create AI channel
+            session_model = request.env['ai.chat.session']
+            channel = session_model.get_or_create_ai_channel_for_user()
+
+            return {
+                'success': True,
+                'channel_id': channel.id,
+                'channel_name': channel.name,
+            }
+
+        except Exception as e:
+            _logger.exception("Error getting AI channel")
+            return {'success': False, 'error': str(e)}
+
     @http.route('/ai_chat/open_discuss_channel', type='http', auth='user')
     def open_discuss_channel(self, **kwargs):
         """Open or create AI Assistant channel in Discuss"""
