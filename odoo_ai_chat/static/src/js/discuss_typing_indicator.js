@@ -18,7 +18,19 @@ const typingIndicatorService = {
 
         // Listen for ALL bus notifications
         bus_service.addEventListener("notification", ({ detail: notifications }) => {
+            // Validate that notifications is iterable
+            if (!notifications || typeof notifications[Symbol.iterator] !== 'function') {
+                console.warn("[AI Chat] Invalid notifications format:", notifications);
+                return;
+            }
+
             for (const notification of notifications) {
+                // Validate notification is an array before destructuring
+                if (!Array.isArray(notification) || notification.length < 2) {
+                    console.warn("[AI Chat] Invalid notification format:", notification);
+                    continue;
+                }
+
                 const [channel, message] = notification;
 
                 console.log("[AI Chat] Bus notification received:", {
