@@ -192,6 +192,13 @@ export const aiChatService = {
             return messages;
         }
 
+        /**
+         * Toggle floating chat window
+         */
+        function toggleWindow() {
+            notifyListeners('toggle_window', {});
+        }
+
         return {
             sendMessage,
             getSessions,
@@ -202,6 +209,7 @@ export const aiChatService = {
             getCurrentSessionId,
             setCurrentSessionId,
             getCurrentMessages,
+            toggleWindow,
         };
     },
 };

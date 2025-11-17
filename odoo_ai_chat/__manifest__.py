@@ -35,6 +35,7 @@
             'odoo_ai_chat/static/src/js/chart_renderer.js',
             'odoo_ai_chat/static/src/js/ai_chat_service.js',
             'odoo_ai_chat/static/src/js/ai_chat_widget.js',
+            'odoo_ai_chat/static/src/js/chat_window.js',
             'odoo_ai_chat/static/src/js/systray_item.js',
             'odoo_ai_chat/static/src/js/context_tracker.js',
             'odoo_ai_chat/static/src/js/discuss_context_updater.js',

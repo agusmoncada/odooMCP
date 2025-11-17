@@ -8,6 +8,170 @@
         </div>
     </t>
 
+    <!-- Floating Chat Window Template -->
+    <t t-name="odoo_ai_chat.FloatingChatWindow" owl="1">
+        <div t-if="state.isOpen" class="o_ai_chat_floating_window" t-att-class="state.isMinimized ? 'minimized' : ''">
+            <!-- Header -->
+            <div class="o_ai_chat_floating_header" t-on-click="toggleMinimize">
+                <h4 class="o_ai_chat_floating_title">
+                    <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI" class="o_ai_chat_header_icon"/>
+                    AI Chat Assistant
+                </h4>
+                <div class="o_ai_chat_floating_controls">
+                    <button class="btn btn-sm btn-link" t-on-click.stop="toggleMinimize" title="Minimize">
+                        <i t-att-class="state.isMinimized ? 'fa fa-window-maximize' : 'fa fa-window-minimize'"/>
+                    </button>
+                    <button class="btn btn-sm btn-link" t-on-click.stop="closeWindow" title="Close">
+                        <i class="fa fa-times"/>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Body (hidden when minimized) -->
+            <div t-if="!state.isMinimized" class="o_ai_chat_floating_body">
+                <div class="o_ai_chat_floating_toolbar">
+                    <button class="btn btn-sm btn-secondary" t-on-click="toggleSessions">
+                        <i class="fa fa-bars"/> Sessions
+                    </button>
+                    <button class="btn btn-sm btn-primary" t-on-click="newChat">
+                        <i class="fa fa-plus"/> New Chat
+                    </button>
+                </div>
+
+                <div class="o_ai_chat_floating_content">
+                    <!-- Sessions Sidebar -->
+                    <div class="o_ai_chat_sessions" t-att-class="state.showSessions ? 'show' : ''">
+                        <div class="o_ai_chat_sessions_header">
+                            <h5>Recent Chats</h5>
+                        </div>
+                        <div class="o_ai_chat_sessions_list">
+                            <t t-if="state.sessions.length === 0">
+                                <div class="o_ai_chat_empty">
+                                    <p>No chat sessions yet</p>
+                                </div>
+                            </t>
+                            <t t-foreach="state.sessions" t-as="session" t-key="session.id">
+                                <div class="o_ai_chat_session_item"
+                                     t-att-class="state.currentSessionId === session.id ? 'active' : ''"
+                                     t-on-click="() => this.loadSession(session.id)">
+                                    <div class="o_ai_chat_session_content">
+                                        <div class="o_ai_chat_session_name">
+                                            <t t-esc="session.name"/>
+                                        </div>
+                                        <div class="o_ai_chat_session_meta">
+                                            <span t-esc="formatDate(session.last_message_date || session.create_date)"/>
+                                            <span class="ms-2">
+                                                <i class="fa fa-comment"/> <t t-esc="session.message_count"/>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-sm btn-link o_ai_chat_session_delete"
+                                            t-on-click="(e) => this.deleteSession(session.id, e)">
+                                        <i class="fa fa-trash"/>
+                                    </button>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+
+                    <!-- Messages Area -->
+                    <div class="o_ai_chat_messages_container">
+                        <div class="o_ai_chat_messages">
+                            <t t-if="state.messages.length === 0">
+                                <div class="o_ai_chat_welcome">
+                                    <i class="fa fa-robot fa-3x mb-3"/>
+                                    <h5>Welcome to AI Chat</h5>
+                                    <p>Ask me anything!</p>
+                                </div>
+                            </t>
+
+                            <t t-foreach="state.messages" t-as="message" t-key="message_index">
+                                <t t-if="message.role !== 'tool'">
+                                    <div class="o_ai_chat_message"
+                                         t-att-class="'o_ai_chat_message_' + message.role">
+                                        <div class="o_ai_chat_message_avatar">
+                                            <t t-if="message.role === 'user'">
+                                                <i class="fa fa-user"/>
+                                            </t>
+                                            <t t-else="">
+                                                <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI" class="o_ai_chat_avatar_img"/>
+                                            </t>
+                                        </div>
+                                        <div class="o_ai_chat_message_content">
+                                            <div class="o_ai_chat_message_text">
+                                                <t t-esc="message.content"/>
+                                            </div>
+
+                                            <!-- Graph canvas -->
+                                            <t t-if="message.graph_data">
+                                                <div class="o_ai_chat_graph_container">
+                                                    <canvas t-att-id="'chart_' + (message.id || message_index)"
+                                                            class="o_ai_chat_graph_canvas"/>
+                                                </div>
+                                            </t>
+
+                                            <div class="o_ai_chat_message_time">
+                                                <t t-esc="formatDate(message.create_date)"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </t>
+                            </t>
+
+                            <t t-if="state.loading">
+                                <div class="o_ai_chat_message o_ai_chat_message_assistant">
+                                    <div class="o_ai_chat_message_avatar">
+                                        <img src="/odoo_ai_chat/static/src/img/logo.png" alt="AI" class="o_ai_chat_avatar_img"/>
+                                    </div>
+                                    <div class="o_ai_chat_message_content">
+                                        <div class="o_ai_chat_typing">
+                                            <span></span>
+                                            <span></span>
+                                            <span></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
+
+                            <div t-ref="messagesEnd"/>
+                        </div>
+
+                        <!-- Input Area -->
+                        <div class="o_ai_chat_input_container">
+                            <div class="o_ai_chat_input">
+                                <button class="btn btn-sm btn-secondary o_ai_chat_attach_btn"
+                                        t-on-click="onAttachFile"
+                                        t-att-disabled="state.loading || state.uploadingFile"
+                                        title="Upload PDF Invoice">
+                                    <i t-att-class="state.uploadingFile ? 'fa fa-spinner fa-spin' : 'fa fa-paperclip'"/>
+                                </button>
+                                <textarea
+                                    class="form-control"
+                                    placeholder="Type your message..."
+                                    rows="2"
+                                    t-model="state.inputMessage"
+                                    t-on-keypress="onInputKeyPress"
+                                    t-att-disabled="state.loading || state.uploadingFile"
+                                />
+                                <button class="btn btn-primary"
+                                        t-on-click="sendMessage"
+                                        t-att-disabled="state.loading || state.uploadingFile || !state.inputMessage.trim()">
+                                    <i t-att-class="state.loading ? 'fa fa-spinner fa-spin' : 'fa fa-paper-plane'"/>
+                                </button>
+                            </div>
+                            <!-- Hidden file input -->
+                            <input type="file"
+                                   t-ref="fileInput"
+                                   style="display: none;"
+                                   accept=".pdf,application/pdf"
+                                   t-on-change="onFileSelected"/>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </t>
+
     <!-- Main Chat Widget Template -->
     <t t-name="odoo_ai_chat.ChatWidget" owl="1">
         <div class="o_ai_chat_widget">

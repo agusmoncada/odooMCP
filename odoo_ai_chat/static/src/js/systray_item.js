@@ -17,11 +17,17 @@ export class AIChatSystrayItem extends Component {
     }
 
     /**
-     * Open AI Chat in Discuss
+     * Toggle AI Chat floating window
      */
     async openChat() {
-        // Redirect to controller that opens or creates the AI Assistant channel in Discuss
-        window.location.href = '/ai_chat/open_discuss_channel';
+        // Trigger toggle event to open/close the floating chat window
+        this.aiChat.addEventListener((event, data) => {});  // Dummy listener to ensure service is initialized
+        // Manually trigger the toggle event
+        const listeners = this.aiChat._listeners || [];
+        // Use a more direct approach - call a toggle method we'll add to the service
+        if (this.aiChat.toggleWindow) {
+            this.aiChat.toggleWindow();
+        }
     }
 }
 
