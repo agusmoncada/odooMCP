@@ -993,8 +993,11 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                         if self.current_view_context:
                             try:
                                 view_context = json.loads(self.current_view_context)
-                            except Exception:
-                                pass
+                                _logger.info(f"[Tool Execution] Passing view context to {tool_name}: model={view_context.get('model')}, active_id={view_context.get('active_id')}")
+                            except Exception as e:
+                                _logger.warning(f"[Tool Execution] Failed to parse view context: {e}")
+                        else:
+                            _logger.info(f"[Tool Execution] No view context available for {tool_name}")
 
                         result = mcp_server.call_tool(tool_name, tool_args, view_context=view_context)
 
