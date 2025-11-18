@@ -349,6 +349,7 @@ class MailChannel(models.Model):
             config_params = self.env['ir.config_parameter'].sudo()
             openrouter_api_key = config_params.get_param('odoo_ai_chat.openrouter_api_key')
             openrouter_model = config_params.get_param('odoo_ai_chat.openrouter_model', 'openai/gpt-3.5-turbo')
+            is_anthropic_model = openrouter_model.startswith('anthropic/')
 
             if not openrouter_api_key:
                 raise ValueError("OpenRouter API key not configured")
@@ -379,7 +380,6 @@ class MailChannel(models.Model):
             # Get MCP tools if enabled
             tools = None
             mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
-            is_anthropic_model = openrouter_model.startswith('anthropic/')
             
             if mcp_enabled:
                 try:
@@ -639,8 +639,8 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
 
-            # Verify it was saved by refreshing and reading again
-            self.refresh()
+            # Verify it was saved by invalidating cache and reading again
+            self.invalidate_cache()
             saved_context = self.current_view_context
             _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
             
@@ -663,8 +663,8 @@ Remember: Execute ALL required tool calls before providing a final text response
         """
         # Refresh the record to get latest context in case of transaction isolation
         try:
-            self.env.invalidate_all()
-            self.refresh()
+            # Use invalidate_cache instead of deprecated refresh()
+            self.invalidate_cache()
         except Exception as refresh_error:
             _logger.warning(f"[AI Chat] Could not refresh context: {refresh_error}")
             # Try to get context from database directly
