@@ -132,7 +132,8 @@ class AIChatController(http.Controller):
                         session=session,
                         response=response,
                         ai_provider=ai_provider,
-                        config=config
+                        config=config,
+                        view_context=view_context
                     )
 
                     # Add tool_calls back for frontend display
@@ -194,7 +195,7 @@ class AIChatController(http.Controller):
                 'error': str(e)
             }
 
-    def _execute_tool_calls(self, session, response, ai_provider, config):
+    def _execute_tool_calls(self, session, response, ai_provider, config, view_context=None):
         """Execute MCP tool calls and get final AI response, looping if more tools are needed"""
         current_messages = response.get('messages', [])
         Message = http.request.env['ai.chat.message']
@@ -224,9 +225,15 @@ class AIChatController(http.Controller):
                     tool_call_id = tool_call['tool_call_id']
 
                     _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                    
+                    # Pass view context to tool execution for context-aware operations
+                    if view_context:
+                        _logger.info(f"[Tool Execution] Passing view context to {tool_name}: {view_context}")
+                    else:
+                        _logger.info(f"[Tool Execution] No view context available for {tool_name}")
 
                     # Execute tool via MCP
-                    tool_result = mcp_registry.call_tool(tool_name, tool_args)
+                    tool_result = mcp_registry.call_tool(tool_name, tool_args, view_context=view_context)
 
                     # Log errors from tool execution
                     if not tool_result.get('success'):
