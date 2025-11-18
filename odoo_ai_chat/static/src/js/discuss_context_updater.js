@@ -22,13 +22,16 @@ const discussContextUpdaterService = {
          */
         async function updateAiChannelContext(forceUpdate = false) {
             try {
-                console.log("[AI Chat] updateAiChannelContext called, forceUpdate:", forceUpdate);
+                // Only log detailed info for forced updates to reduce spam
+                if (forceUpdate) {
+                    console.log("[AI Chat] updateAiChannelContext called, forceUpdate:", forceUpdate);
+                }
+                
                 const currentContext = ai_chat_context_tracker.getCurrentContext();
 
-                console.log("[AI Chat] Current context from tracker:", currentContext);
-                
-                // Debug: log context properties individually
-                if (currentContext) {
+                // Only log detailed context for forced updates or when context changes significantly
+                if (forceUpdate && currentContext) {
+                    console.log("[AI Chat] Current context from tracker:", currentContext);
                     console.log("[AI Chat] Context details:", {
                         model: currentContext.model,
                         active_id: currentContext.active_id,
@@ -40,17 +43,26 @@ const discussContextUpdaterService = {
 
                 // Only update if context has changed and we have a valid context
                 if (!currentContext) {
-                    console.log("[AI Chat] No current context, skipping update");
+                    // Only log if this is a forced update to reduce spam
+                    if (forceUpdate) {
+                        console.log("[AI Chat] No current context, skipping update");
+                    }
                     return;
                 }
 
                 if (!currentContext.model) {
-                    console.log("[AI Chat] Context missing model, skipping update");
+                    // Only log if this is a forced update to reduce spam
+                    if (forceUpdate) {
+                        console.log("[AI Chat] Context missing model, skipping update");
+                    }
                     return;
                 }
 
                 if (!currentContext.active_id) {
-                    console.log("[AI Chat] Context missing active_id, skipping update");
+                    // Only log if this is a forced update to reduce spam
+                    if (forceUpdate) {
+                        console.log("[AI Chat] Context missing active_id, skipping update");
+                    }
                     return;
                 }
 
@@ -58,10 +70,13 @@ const discussContextUpdaterService = {
                 const contextKey = `${currentContext.model}-${currentContext.active_id}`;
                 const lastContextKey = lastContext ? `${lastContext.model}-${lastContext.active_id}` : null;
 
-                console.log("[AI Chat] Context keys - current:", contextKey, "last:", lastContextKey);
+                // Only log context comparison for forced updates
+                if (forceUpdate) {
+                    console.log("[AI Chat] Context keys - current:", contextKey, "last:", lastContextKey);
+                }
 
                 if (!forceUpdate && contextKey === lastContextKey) {
-                    console.log("[AI Chat] Context unchanged, skipping update");
+                    // Don't log this every time to reduce spam
                     return;
                 }
 
@@ -108,10 +123,12 @@ const discussContextUpdaterService = {
                     }
                 } catch (error) {
                     console.error("[AI Chat] RPC call failed:", error);
-                    throw error;
+                    // Log but don't throw to avoid breaking other functionality
                 }
             } catch (error) {
                 console.error("[AI Chat] Could not update AI channel context:", error);
+                // Don't let context errors break other functionality
+                return;
             }
         }
 
@@ -174,10 +191,22 @@ const discussContextUpdaterService = {
             subtree: true,
         });
 
-        // Also check periodically (every 3 seconds) to catch any missed updates
+        // Check periodically but less aggressively, and skip if in Discuss without a record
         setInterval(() => {
+            const currentContext = ai_chat_context_tracker.getCurrentContext();
+            // Skip periodic updates if we're in Discuss interface without a specific record
+            if (currentContext && currentContext.action_name === "Discuss" && (!currentContext.model || !currentContext.active_id)) {
+                // Don't spam updates when just browsing Discuss
+                console.log("[AI Chat] Skipping periodic update - in Discuss without specific record");
+                return;
+            }
+            // Also skip if no context at all to avoid spam
+            if (!currentContext || !currentContext.model) {
+                console.log("[AI Chat] Skipping periodic update - no valid context");
+                return;
+            }
             scheduleContextUpdate(false);
-        }, 3000);
+        }, 15000);  // Further reduced frequency to 15s
 
         // Initial update - force it to ensure first context is sent
         scheduleContextUpdate(true);
