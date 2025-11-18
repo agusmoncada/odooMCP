@@ -43,31 +43,51 @@ const contextTrackerService = {
                 const actionData = controller.action;
                 const props = controller.props;
 
+                // Debug: log controller structure to understand what we're working with
+                console.log("[AI Chat] Debug controller:", {
+                    controller: controller,
+                    actionData: actionData,
+                    props: props,
+                    actionDataKeys: actionData ? Object.keys(actionData) : null,
+                    propsKeys: props ? Object.keys(props) : null
+                });
+
                 // Build context information
                 const context = {
                     // Current model being viewed
-                    model: actionData.res_model || props?.resModel,
+                    model: actionData?.res_model || props?.resModel,
 
                     // Action ID and name
-                    action_id: actionData.id,
-                    action_name: actionData.name || actionData.display_name,
+                    action_id: actionData?.id,
+                    action_name: actionData?.name || actionData?.display_name,
 
                     // Current record(s) if viewing specific records
-                    active_id: props?.resId || actionData.context?.active_id,
-                    active_ids: actionData.context?.active_ids || (props?.resId ? [props.resId] : []),
+                    active_id: props?.resId || actionData?.context?.active_id,
+                    active_ids: actionData?.context?.active_ids || (props?.resId ? [props.resId] : []),
 
                     // View type (form, list, kanban, etc.)
-                    view_type: props?.type || actionData.view_mode,
+                    view_type: props?.type || actionData?.view_mode,
 
                     // Domain filter currently applied
-                    domain: actionData.domain,
+                    domain: actionData?.domain,
 
                     // Full action context
-                    context: actionData.context || {},
+                    context: actionData?.context || {},
 
                     // Timestamp when context was captured
                     timestamp: Date.now(),
                 };
+
+                // If action-based context detection failed, try URL-based fallback
+                if (!context.model || !context.active_id) {
+                    const urlContext = getContextFromUrl();
+                    if (urlContext.model && urlContext.active_id) {
+                        console.log("[AI Chat] Using URL-based context fallback:", urlContext);
+                        context.model = urlContext.model;
+                        context.active_id = urlContext.active_id;
+                        context.view_type = urlContext.view_type;
+                    }
+                }
 
                 currentContext = context;
 
@@ -151,6 +171,58 @@ const contextTrackerService = {
             }
 
             return context;
+        }
+
+        /**
+         * Extract context from URL as fallback when action-based detection fails
+         * Parses URLs like /web#id=12&model=res.partner&view_type=form
+         */
+        function getContextFromUrl() {
+            try {
+                const url = window.location.href;
+                const hash = window.location.hash;
+                
+                console.log("[AI Chat] Parsing URL for context:", url);
+                
+                // Parse URL hash parameters
+                const params = new URLSearchParams(hash.replace('#', ''));
+                
+                // Look for various patterns
+                let model = params.get('model');
+                let active_id = params.get('id');
+                let view_type = params.get('view_type');
+                
+                // Alternative patterns
+                if (!model) {
+                    // Check if URL contains action parameter with embedded model info
+                    const actionMatch = hash.match(/action=(\d+)/);
+                    const idMatch = hash.match(/id=(\d+)/);
+                    const modelMatch = hash.match(/model=([^&]+)/);
+                    
+                    if (modelMatch) model = modelMatch[1];
+                    if (idMatch) active_id = parseInt(idMatch[1]);
+                }
+                
+                // Special cases for common models
+                if (hash.includes('res.partner') || url.includes('/contacts/')) {
+                    model = 'res.partner';
+                }
+                if (hash.includes('account.move') || url.includes('/invoices/')) {
+                    model = 'account.move';
+                }
+                if (hash.includes('project.project') || url.includes('/projects/')) {
+                    model = 'project.project';
+                }
+                
+                return {
+                    model: model,
+                    active_id: active_id ? parseInt(active_id) : null,
+                    view_type: view_type || 'form'
+                };
+            } catch (error) {
+                console.debug("[AI Chat] Error parsing URL:", error);
+                return {};
+            }
         }
 
         // Initialize context from current controller

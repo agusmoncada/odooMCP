@@ -464,6 +464,27 @@ class MailChannel(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment'
                         )
+                        
+                        # Force bus notification to refresh frontend
+                        # This ensures the new message appears immediately without manual refresh
+                        try:
+                            # Notify all channel members about the new message
+                            for member in self.channel_member_ids:
+                                if member.partner_id:
+                                    self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
+                                        'id': posted_message.id,
+                                        'channel_id': self.id,
+                                    })
+                            
+                            # Also send channel update notification
+                            self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
+                                'id': self.id,
+                                'last_interest_dt': fields.Datetime.now().isoformat(),
+                            })
+                            _logger.info(f"Sent bus notifications for AI message {posted_message.id}")
+                        except Exception as bus_error:
+                            _logger.warning(f"Failed to send bus notifications: {bus_error}")
+                        
                         # Commit - Odoo will send bus notifications automatically after commit
                         self.env.cr.commit()
                         _logger.info(f"Posted AI message {posted_message.id} to channel {self.id} and committed")
@@ -488,8 +509,21 @@ class MailChannel(models.Model):
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment'
                     )
-
-                    # NOTE: Removed manual bus notification - Odoo handles this automatically on commit
+                    
+                    # Force bus notification for error messages too
+                    try:
+                        for member in self.channel_member_ids:
+                            if member.partner_id:
+                                self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
+                                    'id': posted_message.id,
+                                    'channel_id': self.id,
+                                })
+                        _logger.info(f"Sent bus notifications for error message {posted_message.id}")
+                    except Exception as bus_error:
+                        _logger.warning(f"Failed to send bus notifications for error: {bus_error}")
+                    
+                    # Commit to save the error message
+                    self.env.cr.commit()
             except Exception as post_error:
                 # If even posting the error fails, just log it
                 _logger.error(f"Failed to post error message to channel: {post_error}")
@@ -1474,6 +1508,26 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                     message_type='comment',
                     subtype_xmlid='mail.mt_comment'
                 )
+                
+                # Force bus notification to refresh frontend for tool call responses
+                try:
+                    # Notify all channel members about the new message
+                    for member in self.channel_member_ids:
+                        if member.partner_id:
+                            self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
+                                'id': posted_message.id,
+                                'channel_id': self.id,
+                            })
+                    
+                    # Also send channel update notification
+                    self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
+                        'id': self.id,
+                        'last_interest_dt': fields.Datetime.now().isoformat(),
+                    })
+                    _logger.info(f"Sent bus notifications for tool call AI message {posted_message.id}")
+                except Exception as bus_error:
+                    _logger.warning(f"Failed to send bus notifications for tool calls: {bus_error}")
+                
                 # Commit - Odoo will send bus notifications automatically after commit
                 self.env.cr.commit()
                 _logger.info(f"Posted final AI message {posted_message.id} to channel {self.id} after {iteration} iterations and committed")

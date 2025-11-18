@@ -659,8 +659,21 @@ Only use a different language if the user explicitly requests it.
             if not attachment.exists():
                 return {'success': False, 'error': 'Attachment not found'}
 
+            # Try to access attachment data with proper error handling
+            try:
+                attachment_data = attachment.datas
+                if not attachment_data:
+                    return {'success': False, 'error': 'Attachment has no content'}
+            except FileNotFoundError as e:
+                return {'success': False, 'error': f'Attachment file not found in filestore: {str(e)}. The file may have been deleted or moved.'}
+            except Exception as e:
+                return {'success': False, 'error': f'Error accessing attachment data: {str(e)}'}
+
             # Decode PDF content
-            pdf_content = base64.b64decode(attachment.datas)
+            try:
+                pdf_content = base64.b64decode(attachment_data)
+            except Exception as e:
+                return {'success': False, 'error': f'Error decoding attachment data: {str(e)}'}
 
             # Process PDF
             from ..models.pdf_processor import PDFInvoiceProcessor
@@ -674,7 +687,7 @@ Only use a different language if the user explicitly requests it.
             # Create vendor bill
             invoice_result = processor.create_vendor_bill(
                 invoice_data=result['data'],
-                pdf_content_b64=attachment.datas,
+                pdf_content_b64=attachment_data,
                 filename=attachment.name
             )
 

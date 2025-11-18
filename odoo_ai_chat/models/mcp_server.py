@@ -957,15 +957,34 @@ class MCPServer:
                     'error': f'Attachment with ID {attachment_id} not found'
                 }
             
-            if not attachment.datas:
+            # Try to access attachment data with proper error handling
+            try:
+                attachment_data = attachment.datas
+                if not attachment_data:
+                    return {
+                        'success': False,
+                        'error': 'Attachment has no content'
+                    }
+            except FileNotFoundError as e:
                 return {
                     'success': False,
-                    'error': 'Attachment has no content'
+                    'error': f'Attachment file not found in filestore: {str(e)}. The file may have been deleted or moved.'
+                }
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'Error accessing attachment data: {str(e)}'
                 }
             
             # Decode PDF content
             import base64
-            pdf_content = base64.b64decode(attachment.datas)
+            try:
+                pdf_content = base64.b64decode(attachment_data)
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'Error decoding attachment data: {str(e)}'
+                }
             filename = filename or attachment.name
             
             # Process PDF with OCR
@@ -978,7 +997,7 @@ class MCPServer:
             # Create vendor bill
             bill_result = processor.create_vendor_bill(
                 invoice_data=result['data'],
-                pdf_content_b64=attachment.datas,
+                pdf_content_b64=attachment_data,
                 filename=filename
             )
             
