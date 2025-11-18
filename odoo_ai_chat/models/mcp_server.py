@@ -138,7 +138,7 @@ class MCPServer:
             },
             'generate_graph': {
                 'name': 'generate_graph',
-                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries.',
+                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries. EXAMPLES: "sales by customer" -> use partner_id for group_by, "sales by product" -> use product_id for group_by, "sales by status" -> use state for group_by.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -173,7 +173,7 @@ class MCPServer:
                         },
                         'group_by': {
                             'type': 'string',
-                            'description': 'Optional field to group by (e.g., partner_id, state, user_id)'
+                            'description': 'IMPORTANT field to group data by. Examples: "partner_id" for grouping by customer/client, "product_id" or "product_template_id" for grouping by product, "state" for grouping by status, "user_id" for grouping by salesperson, "team_id" for grouping by sales team. This determines how the chart data is categorized. ALWAYS specify this for meaningful charts.'
                         },
                         'title': {
                             'type': 'string',
@@ -274,11 +274,16 @@ class MCPServer:
             elif tool_name == 'get_model_fields':
                 return self._get_model_fields(**arguments)
             elif tool_name == 'generate_graph':
-                return self._generate_graph(**arguments)
+                _logger.info(f"[MCP] generate_graph called with arguments: {arguments}")
+                result = self._generate_graph(**arguments)
+                _logger.info(f"[MCP] generate_graph result summary: success={result.get('success')}, has_image={bool(result.get('image_base64'))}, image_length={len(result.get('image_base64', ''))}")
+                return result
             elif tool_name == 'create_vendor_bill_from_pdf':
                 return self._create_vendor_bill_from_pdf(**arguments)
             elif tool_name == 'read_group':
                 return self._read_group(**arguments)
+            elif tool_name == 'debug_test_charts':
+                return self.debug_test_chart_generation()
             else:
                 return {'error': f'Unknown tool: {tool_name}'}
         except Exception as e:
@@ -647,6 +652,8 @@ class MCPServer:
                        date_range: str = 'month', aggregation: str = 'sum',
                        limit: int = 50) -> Dict:
         """Generate graph data from Odoo records"""
+        _logger.info(f"[Graph] Generating {graph_type} chart for {model}")
+        _logger.info(f"[Graph] Parameters: x_field={x_field}, y_field={y_field}, group_by={group_by}, domain={domain}")
         try:
             Model = self.env[model]
 
@@ -671,6 +678,7 @@ class MCPServer:
 
             # Fetch records
             records = Model.search(domain, limit=limit * 2)  # Fetch more for grouping
+            _logger.info(f"[Graph] Found {len(records)} records matching domain: {domain}")
 
             if not records:
                 return {'success': False, 'error': 'No records found matching the criteria'}
@@ -682,7 +690,9 @@ class MCPServer:
             if group_by:
                 fields_to_read.append(group_by)
 
+            _logger.info(f"[Graph] Reading fields: {fields_to_read}")
             data = records.read(fields_to_read)
+            _logger.info(f"[Graph] Read {len(data)} records, sample data: {data[:2] if len(data) >= 2 else data}")
 
             # Process data based on graph type and grouping
             # Use pure Python implementation (lightweight, no dependencies)
@@ -697,6 +707,8 @@ class MCPServer:
             # Add metadata
             result['graph_data']['title'] = title
             result['graph_data']['record_count'] = len(records)
+            
+            _logger.info(f"[Graph] Final chart data - labels: {result['graph_data'].get('labels', [])[:5]}, values: {result['graph_data'].get('datasets', [{}])[0].get('data', [])[:5]}")
 
             return result
 
@@ -708,6 +720,7 @@ class MCPServer:
                             x_field: str, y_field: str, group_by: str,
                             aggregation: str, limit: int, title: str) -> Dict:
         """Process graph data using pure Python (lightweight, no dependencies)"""
+        _logger.info(f"[Graph] Processing data - group_by={group_by}, y_field={y_field}, aggregation={aggregation}")
         # Simple implementation without pandas
         if group_by:
             # Group and aggregate manually
@@ -719,6 +732,8 @@ class MCPServer:
                 if key not in groups:
                     groups[key] = []
                 groups[key].append(value)
+
+            _logger.info(f"[Graph] Groups formed: {dict(list(groups.items())[:3])}")  # Show first 3 groups
 
             # Apply aggregation
             result_data = {}
@@ -759,6 +774,7 @@ class MCPServer:
             values = [value]
 
         # Generate actual image for embedding in Discuss
+        _logger.info(f"[Graph] Rendering image with labels: {labels}, values: {values}")
         image_base64 = self._render_graph_image(graph_type, labels, values, title)
 
         return {
@@ -831,6 +847,35 @@ class MCPServer:
             return 'N/A'
         else:
             return str(label)
+
+    def debug_test_chart_generation(self):
+        """Test chart generation with different parameters"""
+        _logger.info("[DEBUG] Testing chart generation with different parameters...")
+        
+        # Test 1: Sale orders by state
+        test1 = self._generate_graph(
+            graph_type='pie',
+            model='sale.order',
+            y_field='amount_total',
+            group_by='state',
+            aggregation='sum',
+            title='Sales by State'
+        )
+        _logger.info(f"[DEBUG] Test 1 (by state): success={test1.get('success')}, image_size={len(test1.get('image_base64', ''))}")
+        
+        # Test 2: Sale orders by customer
+        test2 = self._generate_graph(
+            graph_type='bar',
+            model='sale.order',
+            y_field='amount_total',
+            group_by='partner_id',
+            aggregation='sum',
+            limit=10,
+            title='Top 10 Customers'
+        )
+        _logger.info(f"[DEBUG] Test 2 (by customer): success={test2.get('success')}, image_size={len(test2.get('image_base64', ''))}")
+        
+        return {"test1_size": len(test1.get('image_base64', '')), "test2_size": len(test2.get('image_base64', ''))}
 
     def _generate_title(self, model: str, y_field: str, group_by: str = None,
                        aggregation: str = 'sum') -> str:
