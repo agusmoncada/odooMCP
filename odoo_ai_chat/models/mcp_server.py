@@ -138,7 +138,7 @@ class MCPServer:
             },
             'generate_graph': {
                 'name': 'generate_graph',
-                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries. EXAMPLES: "sales by customer" -> use partner_id for group_by, "sales by product" -> use product_id for group_by, "sales by status" -> use state for group_by.',
+                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries. CRITICAL: Always use group_by parameter to create meaningful charts. EXAMPLES: "sales by customer" -> group_by="partner_id", "sales by product" -> group_by="product_id", "sales by status" -> group_by="state". Never use x_field for categorization.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -157,23 +157,23 @@ class MCPServer:
                             'description': 'Search domain for filtering records',
                             'default': []
                         },
-                        'x_field': {
-                            'type': 'string',
-                            'description': 'Field for X axis (e.g., create_date, date_order) - optional for pie charts'
-                        },
                         'y_field': {
                             'type': 'string',
                             'description': 'Field for Y axis - numeric field to aggregate (e.g., amount_total, quantity)'
+                        },
+                        'group_by': {
+                            'type': 'string',
+                            'description': 'REQUIRED field to group data by for meaningful charts. Examples: "partner_id" for grouping by customer/client, "product_id" or "product_template_id" for grouping by product, "state" for grouping by status, "user_id" for grouping by salesperson. This creates separate bars/slices for each group. DO NOT use x_field for grouping - use group_by instead.'
+                        },
+                        'x_field': {
+                            'type': 'string',
+                            'description': 'Optional field for X axis (only for time series with date fields like create_date, date_order) - NOT for grouping by categories'
                         },
                         'aggregation': {
                             'type': 'string',
                             'enum': ['sum', 'avg', 'count', 'min', 'max'],
                             'description': 'Aggregation method for y_field',
                             'default': 'sum'
-                        },
-                        'group_by': {
-                            'type': 'string',
-                            'description': 'IMPORTANT field to group data by. Examples: "partner_id" for grouping by customer/client, "product_id" or "product_template_id" for grouping by product, "state" for grouping by status, "user_id" for grouping by salesperson, "team_id" for grouping by sales team. This determines how the chart data is categorized. ALWAYS specify this for meaningful charts.'
                         },
                         'title': {
                             'type': 'string',
@@ -191,7 +191,7 @@ class MCPServer:
                             'default': 50
                         }
                     },
-                    'required': ['graph_type', 'model', 'y_field']
+                    'required': ['graph_type', 'model', 'y_field', 'group_by']
                 }
             },
             'create_vendor_bill_from_pdf': {
@@ -654,6 +654,11 @@ class MCPServer:
         """Generate graph data from Odoo records"""
         _logger.info(f"[Graph] Generating {graph_type} chart for {model}")
         _logger.info(f"[Graph] Parameters: x_field={x_field}, y_field={y_field}, group_by={group_by}, domain={domain}")
+        
+        # Warn if group_by is missing - this is usually the cause of identical charts
+        if not group_by:
+            _logger.warning(f"[Graph] WARNING: group_by is None! This will create a single 'Total' bar instead of grouped data. For meaningful charts, specify group_by parameter.")
+        
         try:
             Model = self.env[model]
 
