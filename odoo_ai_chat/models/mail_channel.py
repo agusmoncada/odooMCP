@@ -338,11 +338,17 @@ class MailChannel(models.Model):
             else:
                 session = self.ai_session_id
 
+            # Clean HTML from user message before processing
+            import re
+            clean_message = re.sub(r'<[^>]+>', '', user_message_body).strip()
+            if not clean_message:
+                clean_message = user_message_body  # Fallback to original if cleaning resulted in empty string
+            
             # Create user message in session
             user_msg = self.env['ai.chat.message'].create({
                 'session_id': session.id,
                 'role': 'user',
-                'content': user_message_body,
+                'content': clean_message,
             })
 
             # Get AI configuration
@@ -640,7 +646,7 @@ Remember: Execute ALL required tool calls before providing a final text response
             _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
 
             # Verify it was saved by invalidating cache and reading again
-            self.invalidate_cache()
+            self.env.invalidate_all()
             saved_context = self.current_view_context
             _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
             
@@ -663,8 +669,8 @@ Remember: Execute ALL required tool calls before providing a final text response
         """
         # Refresh the record to get latest context in case of transaction isolation
         try:
-            # Use invalidate_cache instead of deprecated refresh()
-            self.invalidate_cache()
+            # Use env.invalidate_all() instead of deprecated invalidate_cache()
+            self.env.invalidate_all()
         except Exception as refresh_error:
             _logger.warning(f"[AI Chat] Could not refresh context: {refresh_error}")
             # Try to get context from database directly
