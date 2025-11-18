@@ -737,18 +737,39 @@ Only use a different language if the user explicitly requests it.
         try:
             _logger.info(f"[AI Chat Controller] update_channel_context endpoint called")
             _logger.info(f"[AI Chat Controller] User: {request.env.user.name} (ID: {request.env.uid})")
-            _logger.info(f"[AI Chat Controller] Raw request.jsonrequest: {getattr(request, 'jsonrequest', 'No jsonrequest')}")
+            
+            # Get request data in different ways
+            jsonrequest = getattr(request, 'jsonrequest', {})
+            httprequest = getattr(request, 'httprequest', None)
+            
+            _logger.info(f"[AI Chat Controller] jsonrequest: {jsonrequest}")
             _logger.info(f"[AI Chat Controller] Raw kwargs received: {kwargs}")
             _logger.info(f"[AI Chat Controller] Context parameter: {context}")
             _logger.info(f"[AI Chat Controller] Context type: {type(context)}")
             
-            # If we have context, log its details, otherwise check if it's in kwargs
-            if context:
-                _logger.info(f"[AI Chat Controller] Context details: model={context.get('model')}, active_id={context.get('active_id')}")
-            elif 'context' in kwargs:
-                _logger.info(f"[AI Chat Controller] Context found in kwargs: {kwargs['context']}")
+            # Try to get context from different sources
+            actual_context = context
+            
+            if not actual_context and 'context' in kwargs:
+                actual_context = kwargs['context']
+                _logger.info(f"[AI Chat Controller] Context found in kwargs: {actual_context}")
+            
+            if not actual_context and jsonrequest and 'context' in jsonrequest:
+                actual_context = jsonrequest['context']
+                _logger.info(f"[AI Chat Controller] Context found in jsonrequest: {actual_context}")
+            
+            if not actual_context and httprequest and hasattr(httprequest, 'json') and httprequest.json:
+                try:
+                    json_data = httprequest.json
+                    actual_context = json_data.get('context')
+                    _logger.info(f"[AI Chat Controller] Context found in httprequest.json: {actual_context}")
+                except Exception as e:
+                    _logger.info(f"[AI Chat Controller] Could not parse httprequest.json: {e}")
+            
+            if not actual_context:
+                _logger.warning(f"[AI Chat Controller] No context found in any source")
             else:
-                _logger.warning(f"[AI Chat Controller] No context found in parameters or kwargs")
+                _logger.info(f"[AI Chat Controller] Final context: model={actual_context.get('model')}, active_id={actual_context.get('active_id')}")
 
             # Get or create AI channel for this user
             session_model = request.env['ai.chat.session']
@@ -757,20 +778,20 @@ Only use a different language if the user explicitly requests it.
             _logger.info(f"[AI Chat Controller] Got AI channel: {channel.id} ({channel.name})")
 
             # Update the channel's view context
-            if context and context.get('model') and context.get('active_id'):
+            if actual_context and actual_context.get('model') and actual_context.get('active_id'):
                 _logger.info(f"[AI Chat Controller] Valid context received, updating channel")
-                channel.update_view_context(context)
+                channel.update_view_context(actual_context)
                 
                 # Commit the transaction to ensure it's saved
                 request.env.cr.commit()
                 _logger.info(f"[AI Chat Controller] Context updated and committed for channel {channel.id}")
             else:
-                if not context:
+                if not actual_context:
                     _logger.warning("[AI Chat Controller] No context data provided")
-                elif not context.get('model'):
-                    _logger.warning(f"[AI Chat Controller] Context missing model: {context}")
-                elif not context.get('active_id'):
-                    _logger.warning(f"[AI Chat Controller] Context missing active_id: {context}")
+                elif not actual_context.get('model'):
+                    _logger.warning(f"[AI Chat Controller] Context missing model: {actual_context}")
+                elif not actual_context.get('active_id'):
+                    _logger.warning(f"[AI Chat Controller] Context missing active_id: {actual_context}")
 
             return {'success': True}
 

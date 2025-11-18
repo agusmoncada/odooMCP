@@ -26,6 +26,17 @@ const discussContextUpdaterService = {
                 const currentContext = ai_chat_context_tracker.getCurrentContext();
 
                 console.log("[AI Chat] Current context from tracker:", currentContext);
+                
+                // Debug: log context properties individually
+                if (currentContext) {
+                    console.log("[AI Chat] Context details:", {
+                        model: currentContext.model,
+                        active_id: currentContext.active_id,
+                        view_type: currentContext.view_type,
+                        action_name: currentContext.action_name,
+                        timestamp: currentContext.timestamp
+                    });
+                }
 
                 // Only update if context has changed and we have a valid context
                 if (!currentContext) {
@@ -74,12 +85,19 @@ const discussContextUpdaterService = {
                 // Find the AI channel for the current user
                 // We'll call a backend method to update the context
                 console.log("[AI Chat] About to call RPC with context:", contextForBackend);
+                console.log("[AI Chat] RPC parameters being sent:", {
+                    context: contextForBackend,
+                });
                 
                 let result;
                 try {
-                    result = await rpc("/ai_chat/update_channel_context", {
+                    const rpcParams = {
                         context: contextForBackend,
-                    });
+                    };
+                    
+                    console.log("[AI Chat] Calling RPC with params:", JSON.stringify(rpcParams, null, 2));
+                    
+                    result = await rpc("/ai_chat/update_channel_context", rpcParams);
                     
                     console.log("[AI Chat] RPC call successful, result:", result);
                     

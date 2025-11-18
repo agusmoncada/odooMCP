@@ -216,6 +216,62 @@ class MCPServer:
                     'required': ['invoice_data']
                 }
             },
+            'process_pdf_invoice': {
+                'name': 'process_pdf_invoice',
+                'description': 'Process uploaded PDF invoice using OCR and AI to automatically create vendor bill. Handles vendor/product creation and adds review activity. Use this when user uploads a PDF invoice.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'attachment_id': {
+                            'type': 'integer',
+                            'description': 'ID of uploaded PDF attachment'
+                        },
+                        'filename': {
+                            'type': 'string',
+                            'description': 'Original filename of PDF'
+                        }
+                    },
+                    'required': ['attachment_id']
+                }
+            },
+            'create_activity': {
+                'name': 'create_activity',
+                'description': 'Create an activity/reminder for a record. Use this when user asks to be reminded to do something, create a task, or schedule a follow-up. Perfect for "remind me to call this client", "create a task to review this", etc.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'res_model': {
+                            'type': 'string',
+                            'description': 'Model name of the record (e.g., res.partner, sale.order, account.move)',
+                            'default': 'res.partner'
+                        },
+                        'res_id': {
+                            'type': 'integer',
+                            'description': 'ID of the record to attach the activity to'
+                        },
+                        'summary': {
+                            'type': 'string',
+                            'description': 'Brief summary of the activity (e.g., "Call client", "Review invoice")'
+                        },
+                        'note': {
+                            'type': 'string',
+                            'description': 'Detailed notes or description for the activity'
+                        },
+                        'activity_type': {
+                            'type': 'string',
+                            'enum': ['call', 'meeting', 'todo', 'email', 'follow_up'],
+                            'description': 'Type of activity',
+                            'default': 'todo'
+                        },
+                        'due_days': {
+                            'type': 'integer',
+                            'description': 'Number of days from today for the due date',
+                            'default': 1
+                        }
+                    },
+                    'required': ['res_model', 'res_id', 'summary']
+                }
+            },
             'read_group': {
                 'name': 'read_group',
                 'description': 'Aggregate and group records from an Odoo model. Use this for: summing values by category, counting records by field, getting totals grouped by product/partner/date, calculating averages per group. Perfect for "sum by product", "total by customer", "count by status", etc.',
@@ -280,6 +336,10 @@ class MCPServer:
                 return result
             elif tool_name == 'create_vendor_bill_from_pdf':
                 return self._create_vendor_bill_from_pdf(**arguments)
+            elif tool_name == 'process_pdf_invoice':
+                return self._process_pdf_invoice(**arguments)
+            elif tool_name == 'create_activity':
+                return self._create_activity(**arguments)
             elif tool_name == 'read_group':
                 return self._read_group(**arguments)
             elif tool_name == 'debug_test_charts':
@@ -881,6 +941,153 @@ class MCPServer:
         _logger.info(f"[DEBUG] Test 2 (by customer): success={test2.get('success')}, image_size={len(test2.get('image_base64', ''))}")
         
         return {"test1_size": len(test1.get('image_base64', '')), "test2_size": len(test2.get('image_base64', ''))}
+
+    def _process_pdf_invoice(self, attachment_id: int, filename: str = None) -> Dict:
+        """Process PDF invoice from attachment and create vendor bill"""
+        try:
+            from .pdf_processor import PDFInvoiceProcessor
+            
+            # Get attachment
+            Attachment = self.env['ir.attachment']
+            attachment = Attachment.browse(attachment_id)
+            
+            if not attachment.exists():
+                return {
+                    'success': False,
+                    'error': f'Attachment with ID {attachment_id} not found'
+                }
+            
+            if not attachment.datas:
+                return {
+                    'success': False,
+                    'error': 'Attachment has no content'
+                }
+            
+            # Decode PDF content
+            import base64
+            pdf_content = base64.b64decode(attachment.datas)
+            filename = filename or attachment.name
+            
+            # Process PDF with OCR
+            processor = PDFInvoiceProcessor(self.env)
+            result = processor.process_pdf(pdf_content, filename)
+            
+            if not result['success']:
+                return result
+            
+            # Create vendor bill
+            bill_result = processor.create_vendor_bill(
+                invoice_data=result['data'],
+                pdf_content_b64=attachment.datas,
+                filename=filename
+            )
+            
+            if bill_result['success']:
+                return {
+                    'success': True,
+                    'invoice_id': bill_result['invoice_id'],
+                    'invoice_name': bill_result['invoice_name'],
+                    'vendor_name': bill_result['vendor_name'],
+                    'total': bill_result['total'],
+                    'currency': bill_result['currency'],
+                    'message': f"✅ Successfully processed PDF invoice and created vendor bill {bill_result['invoice_name']} for {bill_result['vendor_name']}. Review activity has been scheduled.",
+                    'ocr_method': result.get('ocr_method', 'text-based'),
+                    'extracted_text_length': len(result.get('raw_text', ''))
+                }
+            else:
+                return bill_result
+                
+        except Exception as e:
+            _logger.exception("Error processing PDF invoice")
+            return {'success': False, 'error': str(e)}
+
+    def _create_activity(self, res_model: str, res_id: int, summary: str, 
+                        note: str = None, activity_type: str = 'todo', due_days: int = 1) -> Dict:
+        """Create an activity/reminder for a record"""
+        try:
+            # Map activity types to Odoo activity type IDs
+            ActivityType = self.env['mail.activity.type']
+            
+            # Try to find the right activity type
+            type_mapping = {
+                'call': ['call', 'phone'],
+                'meeting': ['meeting'],
+                'todo': ['todo', 'to do', 'task'],
+                'email': ['email', 'mail'],
+                'follow_up': ['follow', 'followup']
+            }
+            
+            activity_type_record = None
+            search_terms = type_mapping.get(activity_type, [activity_type])
+            
+            for term in search_terms:
+                activity_type_record = ActivityType.search([
+                    ('name', 'ilike', term)
+                ], limit=1)
+                if activity_type_record:
+                    break
+            
+            # Fallback to first available activity type
+            if not activity_type_record:
+                activity_type_record = ActivityType.search([], limit=1)
+            
+            if not activity_type_record:
+                return {
+                    'success': False,
+                    'error': 'No activity types found in the system'
+                }
+            
+            # Calculate due date
+            from datetime import date, timedelta
+            due_date = date.today() + timedelta(days=due_days)
+            
+            # Validate that the record exists
+            try:
+                target_record = self.env[res_model].browse(res_id)
+                if not target_record.exists():
+                    return {
+                        'success': False,
+                        'error': f'Record {res_model}({res_id}) not found'
+                    }
+                record_name = target_record.display_name if hasattr(target_record, 'display_name') else target_record.name
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'Invalid record reference {res_model}({res_id}): {str(e)}'
+                }
+            
+            # Create the activity
+            Activity = self.env['mail.activity']
+            
+            activity_vals = {
+                'activity_type_id': activity_type_record.id,
+                'summary': summary,
+                'res_id': res_id,
+                'res_model': res_model,
+                'user_id': self.env.user.id,
+                'date_deadline': due_date,
+            }
+            
+            if note:
+                activity_vals['note'] = note
+            
+            activity = Activity.create(activity_vals)
+            
+            return {
+                'success': True,
+                'activity_id': activity.id,
+                'activity_type': activity_type_record.name,
+                'due_date': due_date.strftime('%Y-%m-%d'),
+                'record_name': record_name,
+                'message': f"✅ Created {activity_type_record.name.lower()} activity '{summary}' for {record_name}, due on {due_date.strftime('%Y-%m-%d')}"
+            }
+            
+        except Exception as e:
+            _logger.exception("Error creating activity")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _generate_title(self, model: str, y_field: str, group_by: str = None,
                        aggregation: str = 'sum') -> str:
