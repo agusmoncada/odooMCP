@@ -358,6 +358,10 @@ class MailChannel(models.Model):
 
             # Get messages for API
             messages = session.get_messages_for_api()
+            
+            # Clean up orphaned tool sequences for Anthropic models
+            if is_anthropic_model:
+                messages = self._clean_tool_sequences_for_anthropic(messages)
 
             # Summarize conversation history if too long to prevent API errors
             # Increased threshold from 20 to 30 to reduce summarization overhead
@@ -397,10 +401,10 @@ class MailChannel(models.Model):
                 except Exception as e:
                     _logger.warning(f"Could not load MCP tools: {e}")
 
-            # Convert messages and tools for Anthropic format if needed
+            # Note: OpenRouter handles Anthropic model compatibility internally
+            # No format conversion needed - use OpenAI format for all models via OpenRouter
             if is_anthropic_model and tools:
-                _logger.info(f"Converting to Anthropic format for model {openrouter_model}")
-                messages, tools = self._convert_to_anthropic_format(messages, tools)
+                _logger.info(f"Using OpenAI format for Anthropic model {openrouter_model} via OpenRouter")
             
             # Call OpenRouter API
             response = self._call_openrouter_api(
@@ -413,12 +417,9 @@ class MailChannel(models.Model):
             if response and response.get('choices'):
                 assistant_message = response['choices'][0]['message']
                 
-                # Handle Anthropic vs OpenAI response format
-                if is_anthropic_model:
-                    content, tool_calls = self._parse_anthropic_response(assistant_message)
-                else:
-                    content = assistant_message.get('content', '')
-                    tool_calls = assistant_message.get('tool_calls')
+                # OpenRouter normalizes responses to OpenAI format for all models
+                content = assistant_message.get('content', '')
+                tool_calls = assistant_message.get('tool_calls')
                 if tool_calls:
                     _logger.info(f"AI response includes {len(tool_calls)} tool calls, processing them")
                     # Process tool calls and get final response
@@ -1159,6 +1160,72 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
             _logger.error(f"Error parsing Anthropic response: {e}")
             return message.get('content', ''), message.get('tool_calls')
 
+    def _clean_tool_sequences_for_anthropic(self, messages):
+        """Clean up orphaned tool messages that break Anthropic format validation
+        
+        Anthropic requires that every tool result has a corresponding tool call.
+        This method removes orphaned tool messages and incomplete sequences.
+        """
+        try:
+            cleaned_messages = []
+            i = 0
+            
+            while i < len(messages):
+                msg = messages[i]
+                role = msg.get('role')
+                
+                if role == 'tool':
+                    # Skip orphaned tool messages (tool without preceding assistant with tool_calls)
+                    if not cleaned_messages or cleaned_messages[-1].get('role') != 'assistant' or not cleaned_messages[-1].get('tool_calls'):
+                        _logger.info(f"Skipping orphaned tool message at position {i}")
+                        i += 1
+                        continue
+                        
+                elif role == 'assistant' and msg.get('tool_calls'):
+                    # For assistant messages with tool calls, check if all tool calls have responses
+                    tool_calls = msg.get('tool_calls', [])
+                    
+                    # Look ahead to see if we have tool responses for all tool calls
+                    tool_call_ids = set()
+                    if isinstance(tool_calls, str):
+                        try:
+                            import json
+                            tool_calls_data = json.loads(tool_calls)
+                            tool_call_ids = {tc.get('tool_call_id') for tc in tool_calls_data}
+                        except:
+                            pass
+                    else:
+                        tool_call_ids = {tc.get('id') for tc in tool_calls}
+                    
+                    # Check if we have responses for all tool calls
+                    j = i + 1
+                    found_tool_responses = set()
+                    while j < len(messages) and messages[j].get('role') == 'tool':
+                        tool_msg = messages[j]
+                        tool_call_id = tool_msg.get('tool_call_id')
+                        if tool_call_id in tool_call_ids:
+                            found_tool_responses.add(tool_call_id)
+                        j += 1
+                    
+                    # If not all tool calls have responses, skip this assistant message and its partial responses
+                    if tool_call_ids and found_tool_responses != tool_call_ids:
+                        _logger.info(f"Skipping assistant message with incomplete tool sequence at position {i}")
+                        i = j  # Skip to after the tool messages
+                        continue
+                
+                cleaned_messages.append(msg)
+                i += 1
+            
+            removed_count = len(messages) - len(cleaned_messages)
+            if removed_count > 0:
+                _logger.info(f"Cleaned up {removed_count} orphaned/incomplete tool messages for Anthropic compatibility")
+            
+            return cleaned_messages
+            
+        except Exception as e:
+            _logger.error(f"Error cleaning tool sequences: {e}")
+            return messages
+
     def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
         """Process tool calls from AI and get final response
 
@@ -1292,6 +1359,11 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
             # Get updated messages including tool results
             messages = session.get_messages_for_api()
+            
+            # Clean up tool sequences for Anthropic models in iterations too
+            is_anthropic_model = openrouter_model.startswith('anthropic/')
+            if is_anthropic_model:
+                messages = self._clean_tool_sequences_for_anthropic(messages)
 
             # Summarize conversation if too long
             if len(messages) > 20:
@@ -1305,29 +1377,17 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
             # Call AI again WITH tools enabled to allow multi-step operations
             try:
-                # Convert to Anthropic format if needed for follow-up calls
-                is_anthropic_model = openrouter_model.startswith('anthropic/')
-                if is_anthropic_model and tools:
-                    call_messages, call_tools = self._convert_to_anthropic_format(messages, tools)
-                else:
-                    call_messages, call_tools = messages, tools
-                    
                 next_response = self._call_openrouter_api(
                     openrouter_api_key,
                     openrouter_model,
-                    call_messages,
-                    tools=call_tools  # CRITICAL: Keep tools enabled for multi-step tasks!
+                    messages,
+                    tools=tools  # CRITICAL: Keep tools enabled for multi-step tasks!
                 )
 
                 if next_response and next_response.get('choices'):
                     next_message = next_response['choices'][0]['message']
-                    
-                    # Handle Anthropic response format conversion
-                    if is_anthropic_model:
-                        current_content, current_tool_calls = self._parse_anthropic_response(next_message)
-                    else:
-                        current_content = next_message.get('content', '')
-                        current_tool_calls = next_message.get('tool_calls')
+                    current_content = next_message.get('content', '')
+                    current_tool_calls = next_message.get('tool_calls')
 
                     # Check if AI wants to make more tool calls
                     if current_tool_calls:
