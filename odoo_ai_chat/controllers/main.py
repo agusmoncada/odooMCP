@@ -103,6 +103,8 @@ class AIChatController(http.Controller):
             # Get MCP tools if enabled
             tools = []
             tools_were_executed = False  # Track if we executed tools
+            is_anthropic_model = config['model'].startswith('anthropic/')
+            
             if config['mcp_tools_enabled']:
                 mcp_registry = request.env['mcp.server.registry']
                 tools = mcp_registry.list_tools()
@@ -203,7 +205,7 @@ class AIChatController(http.Controller):
         tools = mcp_registry.list_tools()
 
         graph_data = None
-        max_iterations = 10  # Prevent infinite loops (reduced from 20 to save costs)
+        max_iterations = 5  # Prevent infinite loops and API fatigue (reduced to match mail_channel limit)
         iteration = 0
 
         # Loop to handle multiple rounds of tool calls

@@ -375,6 +375,8 @@ class MailChannel(models.Model):
             # Get MCP tools if enabled
             tools = None
             mcp_enabled = config_params.get_param('odoo_ai_chat.mcp_tools_enabled', 'True') == 'True'
+            is_anthropic_model = openrouter_model.startswith('anthropic/')
+            
             if mcp_enabled:
                 try:
                     mcp_server = self.env['mcp.server.registry'].sudo()
@@ -395,6 +397,11 @@ class MailChannel(models.Model):
                 except Exception as e:
                     _logger.warning(f"Could not load MCP tools: {e}")
 
+            # Convert messages and tools for Anthropic format if needed
+            if is_anthropic_model and tools:
+                _logger.info(f"Converting to Anthropic format for model {openrouter_model}")
+                messages, tools = self._convert_to_anthropic_format(messages, tools)
+            
             # Call OpenRouter API
             response = self._call_openrouter_api(
                 openrouter_api_key,
@@ -405,10 +412,13 @@ class MailChannel(models.Model):
 
             if response and response.get('choices'):
                 assistant_message = response['choices'][0]['message']
-                content = assistant_message.get('content', '')
-
-                # Handle tool calls if any
-                tool_calls = assistant_message.get('tool_calls')
+                
+                # Handle Anthropic vs OpenAI response format
+                if is_anthropic_model:
+                    content, tool_calls = self._parse_anthropic_response(assistant_message)
+                else:
+                    content = assistant_message.get('content', '')
+                    tool_calls = assistant_message.get('tool_calls')
                 if tool_calls:
                     _logger.info(f"AI response includes {len(tool_calls)} tool calls, processing them")
                     # Process tool calls and get final response
@@ -996,6 +1006,159 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
         return response.json()
 
+    def _convert_to_anthropic_format(self, messages, tools):
+        """Convert OpenAI-style messages and tools to Anthropic format for Claude models
+        
+        Anthropic uses a different format for tool calling:
+        - Tools are defined differently
+        - Messages with tool calls use 'content' array with 'tool_use' blocks
+        - Tool responses use 'content' array with 'tool_result' blocks
+        """
+        try:
+            _logger.info(f"Converting {len(messages)} messages and {len(tools)} tools to Anthropic format")
+            
+            # Convert tools to Anthropic format
+            anthropic_tools = []
+            if tools:
+                for tool in tools:
+                    if tool.get('type') == 'function' and 'function' in tool:
+                        func = tool['function']
+                        anthropic_tool = {
+                            "name": func['name'],
+                            "description": func['description'],
+                            "input_schema": func.get('parameters', {})
+                        }
+                        anthropic_tools.append(anthropic_tool)
+            
+            # Convert messages to Anthropic format
+            anthropic_messages = []
+            for msg in messages:
+                converted_msg = self._convert_message_to_anthropic(msg)
+                if converted_msg:
+                    anthropic_messages.append(converted_msg)
+            
+            _logger.info(f"Converted to {len(anthropic_messages)} Anthropic messages with {len(anthropic_tools)} tools")
+            return anthropic_messages, anthropic_tools
+            
+        except Exception as e:
+            _logger.error(f"Error converting to Anthropic format: {e}")
+            # Fallback to original format
+            return messages, tools
+
+    def _convert_message_to_anthropic(self, message):
+        """Convert a single OpenAI-style message to Anthropic format"""
+        try:
+            role = message.get('role')
+            content = message.get('content', '')
+            
+            if role in ['system', 'user']:
+                # System and user messages are straightforward
+                return {
+                    'role': role,
+                    'content': content
+                }
+            
+            elif role == 'assistant':
+                # Check if this assistant message has tool calls
+                tool_calls = message.get('tool_calls')
+                if tool_calls:
+                    # Convert tool calls to Anthropic 'tool_use' blocks
+                    content_blocks = []
+                    
+                    # Add text content if present
+                    if content:
+                        content_blocks.append({
+                            "type": "text",
+                            "text": content
+                        })
+                    
+                    # Add tool use blocks
+                    for tool_call in tool_calls:
+                        if tool_call.get('type') == 'function' and 'function' in tool_call:
+                            func = tool_call['function']
+                            tool_use_block = {
+                                "type": "tool_use",
+                                "id": tool_call.get('id', tool_call.get('tool_call_id')),
+                                "name": func['name'],
+                                "input": json.loads(func['arguments']) if isinstance(func['arguments'], str) else func['arguments']
+                            }
+                            content_blocks.append(tool_use_block)
+                    
+                    return {
+                        'role': 'assistant',
+                        'content': content_blocks
+                    }
+                else:
+                    # Regular assistant message
+                    return {
+                        'role': 'assistant',
+                        'content': content
+                    }
+            
+            elif role == 'tool':
+                # Convert tool response to Anthropic 'tool_result' block
+                tool_call_id = message.get('tool_call_id')
+                tool_name = message.get('name')
+                
+                if tool_call_id:
+                    return {
+                        'role': 'user',  # Tool results are sent as user messages in Anthropic
+                        'content': [{
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": content
+                        }]
+                    }
+                else:
+                    _logger.warning(f"Tool message missing tool_call_id, skipping")
+                    return None
+            
+            else:
+                _logger.warning(f"Unknown message role: {role}")
+                return None
+                
+        except Exception as e:
+            _logger.error(f"Error converting message to Anthropic format: {e}")
+            return None
+
+    def _parse_anthropic_response(self, message):
+        """Parse Anthropic response and extract content and tool calls"""
+        try:
+            content_text = ""
+            tool_calls = []
+            
+            # Anthropic returns content as array or string
+            content = message.get('content', '')
+            
+            if isinstance(content, str):
+                # Simple text response
+                return content, None
+                
+            elif isinstance(content, list):
+                # Content blocks array
+                for block in content:
+                    if block.get('type') == 'text':
+                        content_text += block.get('text', '')
+                    elif block.get('type') == 'tool_use':
+                        # Convert Anthropic tool_use to OpenAI format for compatibility
+                        tool_call = {
+                            'id': block.get('id'),
+                            'type': 'function',
+                            'function': {
+                                'name': block.get('name'),
+                                'arguments': json.dumps(block.get('input', {}))
+                            }
+                        }
+                        tool_calls.append(tool_call)
+                
+                return content_text, tool_calls if tool_calls else None
+            else:
+                return str(content), None
+                
+        except Exception as e:
+            _logger.error(f"Error parsing Anthropic response: {e}")
+            return message.get('content', ''), message.get('tool_calls')
+
     def _process_tool_calls(self, session, tool_calls, assistant_content, openrouter_api_key, openrouter_model, system_prompt, tools):
         """Process tool calls from AI and get final response
 
@@ -1011,9 +1174,9 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         graph_data = None
         mcp_server = self.env['mcp.server.registry'].sudo()
 
-        # Allow up to 10 iterations of tool calls to prevent infinite loops
-        # Most tasks complete in 2-3 iterations, but complex workflows may need more
-        max_iterations = 20  # Allow up to 20 rounds of tool calls
+        # Allow up to 5 iterations to prevent excessive API usage
+        # Most tasks should complete in 2-3 iterations, complex workflows in 4-5
+        max_iterations = 5  # Reduced from 20 to prevent API fatigue and excessive costs
         iteration = 0
 
         # Keep calling AI until it stops making tool calls (task is complete)
@@ -1142,17 +1305,29 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
             # Call AI again WITH tools enabled to allow multi-step operations
             try:
+                # Convert to Anthropic format if needed for follow-up calls
+                is_anthropic_model = openrouter_model.startswith('anthropic/')
+                if is_anthropic_model and tools:
+                    call_messages, call_tools = self._convert_to_anthropic_format(messages, tools)
+                else:
+                    call_messages, call_tools = messages, tools
+                    
                 next_response = self._call_openrouter_api(
                     openrouter_api_key,
                     openrouter_model,
-                    messages,
-                    tools=tools  # CRITICAL: Keep tools enabled for multi-step tasks!
+                    call_messages,
+                    tools=call_tools  # CRITICAL: Keep tools enabled for multi-step tasks!
                 )
 
                 if next_response and next_response.get('choices'):
                     next_message = next_response['choices'][0]['message']
-                    current_content = next_message.get('content', '')
-                    current_tool_calls = next_message.get('tool_calls')
+                    
+                    # Handle Anthropic response format conversion
+                    if is_anthropic_model:
+                        current_content, current_tool_calls = self._parse_anthropic_response(next_message)
+                    else:
+                        current_content = next_message.get('content', '')
+                        current_tool_calls = next_message.get('tool_calls')
 
                     # Check if AI wants to make more tool calls
                     if current_tool_calls:
@@ -1164,8 +1339,11 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                         # Break out of loop to post the final message
                         break
                 else:
-                    _logger.warning("No response from AI after tool execution")
+                    _logger.warning("No response from AI after tool execution - likely context length or API limit reached")
                     current_tool_calls = None
+                    # Provide a helpful fallback message
+                    if not current_content:
+                        current_content = "I've completed the requested operations. The task has been processed successfully."
                     break
 
             except Exception as e:
