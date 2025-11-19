@@ -26,6 +26,7 @@
         'security/ir.model.access.csv',
         'views/ai_chat_views.xml',
         'views/res_config_settings_views.xml',
+        'views/ai_chat_menu.xml',
     ],
     'assets': {
         'web.assets_backend': [
@@ -39,10 +40,14 @@
             'odoo_ai_chat/static/src/js/context_tracker.js',
             'odoo_ai_chat/static/src/js/discuss_context_updater.js',
             'odoo_ai_chat/static/src/js/discuss_typing_indicator.js',
+            'odoo_ai_chat/static/src/js/ai_chat_manager.js',
+            'odoo_ai_chat/static/src/js/ai_chat_systray.js',
             # CSS
             'odoo_ai_chat/static/src/css/ai_chat.css',
             # Templates
             'odoo_ai_chat/static/src/xml/ai_chat_templates.xml',
+            'odoo_ai_chat/static/src/xml/ai_chat_manager.xml',
+            'odoo_ai_chat/static/src/xml/ai_chat_systray.xml',
         ],
     },
     'installable': True,

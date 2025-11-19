@@ -847,3 +847,44 @@ Only use a different language if the user explicitly requests it.
         except Exception as e:
             _logger.exception("Error getting channel context")
             return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/create_new_channel', type='json', auth='user')
+    def create_new_ai_channel(self, name=None, **kwargs):
+        """Create a new AI Assistant channel for multiple conversations"""
+        try:
+            session_model = request.env['ai.chat.session']
+            channel = session_model.create_new_ai_channel_for_user(name=name)
+
+            return {
+                'success': True,
+                'channel_id': channel.id,
+                'channel_name': channel.name,
+                'redirect_url': f'/web#action=mail.action_discuss&active_id={channel.id}'
+            }
+
+        except Exception as e:
+            _logger.exception("Error creating new AI channel")
+            return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/get_user_channels', type='json', auth='user')
+    def get_user_ai_channels(self, **kwargs):
+        """Get all AI channels for the current user"""
+        try:
+            session_model = request.env['ai.chat.session']
+            channels = session_model.get_user_ai_channels()
+
+            return {
+                'success': True,
+                'channels': [{
+                    'id': c.id,
+                    'name': c.name,
+                    'create_date': c.create_date.isoformat(),
+                    'last_message_date': c.last_message_date.isoformat() if hasattr(c, 'last_message_date') and c.last_message_date else None,
+                    'message_count': len(c.message_ids) if hasattr(c, 'message_ids') else 0,
+                    'discuss_url': f'/web#action=mail.action_discuss&active_id={c.id}'
+                } for c in channels]
+            }
+
+        except Exception as e:
+            _logger.exception("Error getting user AI channels")
+            return {'success': False, 'error': str(e)}

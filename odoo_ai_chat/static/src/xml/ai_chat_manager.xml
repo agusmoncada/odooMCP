@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates>
+    <t t-name="odoo_ai_chat.AIChatManager">
+        <div class="ai-chat-manager">
+            <button class="btn btn-primary" t-on-click="toggleManager">
+                <i class="fa fa-comments"/> AI Chat Sessions
+            </button>
+            
+            <div t-if="state.showManager" class="ai-chat-manager-dropdown">
+                <div class="dropdown-menu show" style="position: relative; display: block; margin-top: 5px;">
+                    <div class="dropdown-header">
+                        <strong>AI Assistant Sessions</strong>
+                    </div>
+                    
+                    <div class="dropdown-item">
+                        <button class="btn btn-sm btn-success w-100" t-on-click="createNewChannel">
+                            <i class="fa fa-plus"/> Create New Chat
+                        </button>
+                    </div>
+                    
+                    <div class="dropdown-divider"/>
+                    
+                    <div t-if="state.loading" class="dropdown-item text-center">
+                        <i class="fa fa-spinner fa-spin"/> Loading...
+                    </div>
+                    
+                    <div t-else="">
+                        <div t-if="state.channels.length === 0" class="dropdown-item text-muted">
+                            No AI chat sessions yet
+                        </div>
+                        
+                        <div t-foreach="state.channels" t-as="channel" t-key="channel.id" 
+                             class="dropdown-item ai-channel-item" 
+                             t-on-click="() => this.openChannel(channel.id)"
+                             style="cursor: pointer;">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong t-out="channel.name"/>
+                                    <br/>
+                                    <small class="text-muted">
+                                        <t t-if="channel.message_count">
+                                            <t t-out="channel.message_count"/> messages
+                                        </t>
+                                        <t t-else="">
+                                            No messages yet
+                                        </t>
+                                    </small>
+                                </div>
+                                <i class="fa fa-chevron-right"/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

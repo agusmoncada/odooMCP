@@ -242,6 +242,50 @@ class AIChatSession(models.Model):
 
         return channel
 
+    def create_new_ai_channel_for_user(self, name=None):
+        """Create a new AI channel for the current user (allows multiple sessions)"""
+        ai_bot = self._get_ai_bot_partner()
+        
+        # Generate a unique name if not provided
+        if not name:
+            # Count existing AI channels for this user
+            existing_count = self.env['mail.channel'].search_count([
+                ('channel_type', '=', 'chat'),
+                ('is_ai_channel', '=', True),
+                ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
+            ])
+            name = f'AI Assistant #{existing_count + 1}'
+
+        # Create new AI channel
+        channel = self.env['mail.channel'].create({
+            'name': name,
+            'description': 'Personal AI Assistant powered by IT Patagon',
+            'channel_type': 'chat',
+            'is_ai_channel': True,
+            'channel_partner_ids': [
+                (4, self.env.user.partner_id.id),
+                (4, ai_bot.id)
+            ],
+        })
+
+        # Create linked AI session
+        session = self.create({
+            'name': name,
+            'user_id': self.env.user.id,
+            'channel_id': channel.id,
+        })
+        channel.ai_session_id = session.id
+
+        return channel
+
+    def get_user_ai_channels(self):
+        """Get all AI channels for the current user"""
+        return self.env['mail.channel'].search([
+            ('channel_type', '=', 'chat'),
+            ('is_ai_channel', '=', True),
+            ('channel_partner_ids', 'in', [self.env.user.partner_id.id])
+        ], order='create_date desc')
+
     def get_messages_for_api(self, max_messages=None):
         """Get messages formatted for AI API"""
         import json

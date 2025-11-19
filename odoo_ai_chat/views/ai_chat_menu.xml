@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Add AI Chat to main menu -->
+    <menuitem 
+        id="menu_ai_chat_root"
+        name="AI Chat"
+        sequence="50"
+        web_icon="odoo_ai_chat,static/description/icon.png"/>
+        
+    <!-- AI Chat Sessions submenu -->
+    <menuitem 
+        id="menu_ai_chat_sessions"
+        name="Chat Sessions"
+        parent="menu_ai_chat_root"
+        action="action_ai_chat_sessions"
+        sequence="10"/>
+        
+    <!-- Action to open AI chat sessions view -->
+    <record id="action_ai_chat_sessions" model="ir.actions.act_window">
+        <field name="name">AI Chat Sessions</field>
+        <field name="res_model">ai.chat.session</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('user_id', '=', uid)]</field>
+        <field name="context">{}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No AI chat sessions yet!
+            </p>
+            <p>
+                Create your first AI chat session to start conversing with the AI assistant.
+            </p>
+        </field>
+    </record>
+
+    <!-- Add button to create new AI chat in user menu -->
+    <record id="action_create_new_ai_chat" model="ir.actions.server">
+        <field name="name">Create New AI Chat</field>
+        <field name="model_id" ref="model_ai_chat_session"/>
+        <field name="state">code</field>
+        <field name="code">
+# Create new AI channel and redirect to Discuss
+session_model = env['ai.chat.session']
+channel = session_model.create_new_ai_channel_for_user()
+action = {
+    'type': 'ir.actions.act_url',
+    'url': f'/web#action=mail.action_discuss&amp;active_id={channel.id}',
+    'target': 'current'
+}
+        </field>
+    </record>
+
+    <!-- Add to user menu -->
+    <menuitem 
+        id="menu_create_new_ai_chat"
+        name="New AI Chat"
+        parent="base.menu_administration"
+        action="action_create_new_ai_chat"
+        sequence="100"/>
+
+</odoo>
