@@ -1124,8 +1124,10 @@ class MCPServer:
             
             # Validate that the record exists
             try:
+                _logger.info(f"[Create Activity] Checking if record exists: {res_model}({res_id})")
                 target_record = self.env[res_model].browse(res_id)
                 if not target_record.exists():
+                    _logger.error(f"[Create Activity] Record not found: {res_model}({res_id})")
                     return {
                         'success': False,
                         'error': f'Record {res_model}({res_id}) not found'
