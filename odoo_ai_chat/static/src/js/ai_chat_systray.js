@@ -83,7 +83,12 @@ export class AIChatSystray extends Component {
     }
 }
 
-// Register in systray
-registry.category("systray").add("AIChatSystray", {
-    Component: AIChatSystray,
-}, { sequence: 10 });
+// Register in systray with error handling
+try {
+    registry.category("systray").add("AIChatSystray", {
+        Component: AIChatSystray,
+    }, { sequence: 10 });
+    console.log("[AI Chat] Systray component registered successfully");
+} catch (error) {
+    console.warn("[AI Chat] Could not register systray component:", error);
+}
