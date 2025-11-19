@@ -41,13 +41,16 @@
             'odoo_ai_chat/static/src/js/discuss_context_updater.js',
             'odoo_ai_chat/static/src/js/discuss_typing_indicator.js',
             'odoo_ai_chat/static/src/js/ai_chat_manager.js',
-            'odoo_ai_chat/static/src/js/ai_chat_systray.js',
+            'odoo_ai_chat/static/src/js/ai_chat_global.js',
+            # Temporarily disable systray to avoid template errors
+            # 'odoo_ai_chat/static/src/js/ai_chat_systray.js',
             # CSS
             'odoo_ai_chat/static/src/css/ai_chat.css',
             # Templates
             'odoo_ai_chat/static/src/xml/ai_chat_templates.xml',
             'odoo_ai_chat/static/src/xml/ai_chat_manager.xml',
-            'odoo_ai_chat/static/src/xml/ai_chat_systray.xml',
+            # Temporarily disable systray template
+            # 'odoo_ai_chat/static/src/xml/ai_chat_systray.xml',
         ],
     },
     'installable': True,
