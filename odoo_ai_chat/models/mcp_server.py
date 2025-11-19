@@ -362,7 +362,10 @@ class MCPServer:
             # Handle domain as string (AI sometimes sends JSON strings)
             if isinstance(domain, str):
                 try:
-                    domain = json.loads(domain)
+                    # First try to fix common issues: replace Python tuples with JSON arrays
+                    # Convert ("field", "op", "value") to ["field", "op", "value"]
+                    fixed_domain = domain.replace('("', '["').replace('")', '"]').replace("('", '["').replace("')", '"]')
+                    domain = json.loads(fixed_domain)
                     _logger.info(f"[MCP] Parsed domain from string: {domain}")
                 except json.JSONDecodeError:
                     error_msg = f'Invalid domain format: {domain}'
@@ -675,7 +678,10 @@ class MCPServer:
             # Handle domain as string (AI sometimes sends JSON strings)
             if isinstance(domain, str):
                 try:
-                    domain = json.loads(domain)
+                    # First try to fix common issues: replace Python tuples with JSON arrays
+                    # Convert ("field", "op", "value") to ["field", "op", "value"]
+                    fixed_domain = domain.replace('("', '["').replace('")', '"]').replace("('", '["').replace("')", '"]')
+                    domain = json.loads(fixed_domain)
                 except json.JSONDecodeError:
                     return {'success': False, 'error': f'Invalid domain format: {domain}'}
 
