@@ -1059,6 +1059,10 @@ class MCPServer:
                         note: str = None, activity_type: str = 'todo', due_days: int = 1, 
                         view_context: Optional[Dict] = None) -> Dict:
         """Create an activity/reminder for a record"""
+        _logger.info(f"[Create Activity] Called with: res_model={res_model}, res_id={res_id}, summary={summary}")
+        _logger.info(f"[Create Activity] View context available: {bool(view_context)}")
+        if view_context:
+            _logger.info(f"[Create Activity] View context contents: {view_context}")
         try:
             # If view context is available and parameters are missing, use context to fill them
             if view_context and (not res_model or not res_id):
