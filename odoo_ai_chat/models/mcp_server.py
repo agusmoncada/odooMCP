@@ -60,7 +60,7 @@ class MCPServer:
         self._tools = {
             'search_records': {
                 'name': 'search_records',
-                'description': 'Search and retrieve records from any Odoo model. Use this tool for: queries, counts, sums, checking status, listing data, getting totals, finding records. Returns actual data that you can analyze and present to user. This is your PRIMARY tool for data retrieval.',
+                'description': 'Search and retrieve records from any Odoo model. Use this tool for: queries, counts, sums, checking status, listing data, getting totals, finding records. Returns actual data that you can analyze and present to user. This is your PRIMARY tool for data retrieval. IMPORTANT: For quotations, use model "sale.order" with domain [("state", "=", "draft")]. For confirmed sales orders, use [("state", "=", "sale")].',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -274,7 +274,7 @@ class MCPServer:
             },
             'read_group': {
                 'name': 'read_group',
-                'description': 'Aggregate and group records from an Odoo model. Use this for: summing values by category, counting records by field, getting totals grouped by product/partner/date, calculating averages per group. Perfect for "sum by product", "total by customer", "count by status", etc.',
+                'description': 'Aggregate and group records from an Odoo model. Use this for: summing values by category, counting records by field, getting totals grouped by product/partner/date, calculating averages per group. Perfect for "sum by product", "total by customer", "count by status", etc. IMPORTANT: For quotation totals, use model "sale.order" with domain [["state", "=", "draft"]] and fields ["amount_total:sum"].',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {

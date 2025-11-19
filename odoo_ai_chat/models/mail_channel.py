@@ -469,10 +469,15 @@ class MailChannel(models.Model):
                         # This ensures the new message appears immediately without manual refresh
                         try:
                             # Get the full message data with all required fields
-                            message_data = posted_message._message_notification_values()
-                            # Ensure attachment_ids is always present (even if empty)
-                            if 'attachment_ids' not in message_data:
-                                message_data['attachment_ids'] = []
+                            message_data = {
+                                'id': posted_message.id,
+                                'channel_id': self.id,
+                                'author_id': posted_message.author_id.id if posted_message.author_id else False,
+                                'body': posted_message.body,
+                                'date': posted_message.date.isoformat() if posted_message.date else False,
+                                'attachment_ids': [],  # Always include attachment_ids (empty for now)
+                                'message_type': posted_message.message_type,
+                            }
                             
                             # Notify all channel members about the new message with complete data
                             for member in self.channel_member_ids:
@@ -516,10 +521,15 @@ class MailChannel(models.Model):
                     # Force bus notification for error messages too
                     try:
                         # Get the full message data with all required fields
-                        message_data = posted_message._message_notification_values()
-                        # Ensure attachment_ids is always present (even if empty)
-                        if 'attachment_ids' not in message_data:
-                            message_data['attachment_ids'] = []
+                        message_data = {
+                            'id': posted_message.id,
+                            'channel_id': self.id,
+                            'author_id': posted_message.author_id.id if posted_message.author_id else False,
+                            'body': posted_message.body,
+                            'date': posted_message.date.isoformat() if posted_message.date else False,
+                            'attachment_ids': [],  # Always include attachment_ids (empty for now)
+                            'message_type': posted_message.message_type,
+                        }
                         
                         for member in self.channel_member_ids:
                             if member.partner_id:
@@ -1518,10 +1528,15 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 # Force bus notification to refresh frontend for tool call responses
                 try:
                     # Get the full message data with all required fields
-                    message_data = posted_message._message_notification_values()
-                    # Ensure attachment_ids is always present (even if empty)
-                    if 'attachment_ids' not in message_data:
-                        message_data['attachment_ids'] = []
+                    message_data = {
+                        'id': posted_message.id,
+                        'channel_id': self.id,
+                        'author_id': posted_message.author_id.id if posted_message.author_id else False,
+                        'body': posted_message.body,
+                        'date': posted_message.date.isoformat() if posted_message.date else False,
+                        'attachment_ids': [],  # Always include attachment_ids (empty for now)
+                        'message_type': posted_message.message_type,
+                    }
                     
                     # Notify all channel members about the new message with complete data
                     for member in self.channel_member_ids:
