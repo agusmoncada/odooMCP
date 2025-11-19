@@ -811,3 +811,39 @@ Only use a different language if the user explicitly requests it.
         except Exception as e:
             _logger.exception("Error updating channel context")
             return {'success': False, 'error': str(e)}
+
+    @http.route('/ai_chat/get_channel_context', type='json', auth='user')
+    def get_channel_context(self, **kwargs):
+        """Get the current view context for the AI channel (debugging)"""
+        try:
+            # Find the AI channel for the current user
+            session_model = request.env['ai.chat.session']
+            channel = session_model.get_or_create_ai_channel_for_user()
+            
+            if not channel:
+                return {'success': False, 'error': 'No AI channel found for current user'}
+            
+            # Get current context
+            context_section = channel._get_view_context_section()
+            raw_context = channel.current_view_context
+            
+            # Parse raw context if available
+            parsed_context = None
+            if raw_context:
+                try:
+                    parsed_context = json.loads(raw_context)
+                except json.JSONDecodeError:
+                    parsed_context = None
+            
+            return {
+                'success': True,
+                'channel_id': channel.id,
+                'channel_name': channel.name,
+                'raw_context': raw_context,
+                'parsed_context': parsed_context,
+                'context_section': context_section,
+                'has_context': bool(context_section)
+            }
+        except Exception as e:
+            _logger.exception("Error getting channel context")
+            return {'success': False, 'error': str(e)}
