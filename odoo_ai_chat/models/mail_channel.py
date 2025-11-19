@@ -578,12 +578,25 @@ GENERAL INSTRUCTIONS:
 - Use available tools to access and manipulate Odoo data
 - Be concise and professional
 - Provide clear, actionable answers based on real data
+- NEVER mention tool names in your responses (e.g., don't say "Based on the read_group operation" or "Using search_records")
+- Present results naturally as if you retrieved the information directly
 
 Available tools:
 - search_records: Query Odoo data (sales, customers, products, etc.)
 - create_record: Create new records (use this for EVERY record that needs to be created)
 - write_record: Update existing records
+- create_activity: Create activities/reminders (if user is viewing a record, just provide summary - context is automatic)
+- read_group: Aggregate data (use for sums, totals, counts grouped by field)
 - generate_graph: Create visualizations when explicitly requested
+
+TOOL EFFICIENCY RULES:
+- For quotations, ALWAYS use domain: [["state", "=", "draft"]] with model "sale.order" 
+- For confirmed sales, use domain: [["state", "=", "sale"]] with model "sale.order"
+- For quotation totals: Use read_group with model="sale.order", domain=[["state", "=", "draft"]], fields=["amount_total:sum"]
+- For graphs by product: Use model="sale.order.line", domain=[["order_id.state", "=", "draft"]], group_by="product_id"
+- For activity creation: If user is viewing a specific record, only provide the 'summary' parameter - the tool will automatically use the current record context
+- STOP after first successful tool call if it answers the question - don't retry the same operation
+- If one approach fails, try a simpler alternative rather than repeating the same call
 
 EXAMPLE - Multi-step task handling:
 User: "Create customer ACME and a project for them with 3 stages"
@@ -1259,6 +1272,10 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         # Allow up to 5 iterations to prevent excessive API usage
         # Most tasks should complete in 2-3 iterations, complex workflows in 4-5
         max_iterations = 5  # Reduced from 20 to prevent API fatigue and excessive costs
+        
+        # Track successful tool calls to avoid redundancy
+        successful_tools = set()
+        failed_attempts = {}
         iteration = 0
 
         # Keep calling AI until it stops making tool calls (task is complete)
@@ -1321,6 +1338,14 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                         _logger.info(f"[Tool Execution] {tool_name} result: success={result.get('success')}, error={result.get('error', 'None')}")
                         if not result.get('success') and result.get('error'):
                             _logger.error(f"[Tool Execution] {tool_name} failed with error: {result['error']}")
+                            # Track failed attempts
+                            tool_key = f"{tool_name}:{tool_args.get('model', '')}"
+                            failed_attempts[tool_key] = failed_attempts.get(tool_key, 0) + 1
+                        else:
+                            # Track successful tool calls
+                            tool_key = f"{tool_name}:{tool_args.get('model', '')}"
+                            successful_tools.add(tool_key)
+                            _logger.info(f"[Tool Tracking] Successful: {tool_key}")
 
                         # Extract graph data if this was a generate_graph call
                         if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):

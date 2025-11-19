@@ -236,18 +236,17 @@ class MCPServer:
             },
             'create_activity': {
                 'name': 'create_activity',
-                'description': 'Create an activity/reminder for a record. Use this when user asks to be reminded to do something, create a task, or schedule a follow-up. Perfect for "remind me to call this client", "create a task to review this", etc.',
+                'description': 'Create an activity/reminder for a record. Use this when user asks to be reminded to do something, create a task, or schedule a follow-up. Perfect for "remind me to call this client", "create a task to review this", etc. If the user is currently viewing a specific record (like a customer form), the activity will automatically be attached to that record - you only need to provide the summary.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
                         'res_model': {
                             'type': 'string',
-                            'description': 'Model name of the record (e.g., res.partner, sale.order, account.move)',
-                            'default': 'res.partner'
+                            'description': 'Model name of the record (e.g., res.partner, sale.order, account.move). Optional if user is currently viewing a record.'
                         },
                         'res_id': {
                             'type': 'integer',
-                            'description': 'ID of the record to attach the activity to'
+                            'description': 'ID of the record to attach the activity to. Optional if user is currently viewing a record.'
                         },
                         'summary': {
                             'type': 'string',
@@ -269,7 +268,7 @@ class MCPServer:
                             'default': 1
                         }
                     },
-                    'required': ['res_model', 'res_id', 'summary']
+                    'required': ['summary']
                 }
             },
             'read_group': {
@@ -339,7 +338,7 @@ class MCPServer:
             elif tool_name == 'process_pdf_invoice':
                 return self._process_pdf_invoice(**arguments)
             elif tool_name == 'create_activity':
-                return self._create_activity(**arguments)
+                return self._create_activity(view_context=view_context, **arguments)
             elif tool_name == 'read_group':
                 return self._read_group(**arguments)
             elif tool_name == 'debug_test_charts':
@@ -742,7 +741,21 @@ class MCPServer:
             _logger.warning(f"[Graph] WARNING: group_by is None! This will create a single 'Total' bar instead of grouped data. For meaningful charts, specify group_by parameter.")
         
         try:
+            import json
             Model = self.env[model]
+
+            # Handle domain as string (AI sometimes sends JSON strings)
+            if isinstance(domain, str):
+                try:
+                    # First try to fix common issues: replace Python tuples with JSON arrays
+                    # Convert ("field", "op", "value") to ["field", "op", "value"]
+                    fixed_domain = domain.replace('("', '["').replace('")', '"]').replace("('", '["').replace("')", '"]')
+                    domain = json.loads(fixed_domain)
+                    _logger.info(f"[Graph] Parsed domain from string: {domain}")
+                except json.JSONDecodeError:
+                    error_msg = f'Invalid domain format: {domain}'
+                    _logger.error(f"[Graph] {error_msg}")
+                    return {'success': False, 'error': error_msg}
 
             # Apply date range to domain if x_field is a date field
             if x_field and domain is None:
@@ -1042,10 +1055,33 @@ class MCPServer:
             _logger.exception("Error processing PDF invoice")
             return {'success': False, 'error': str(e)}
 
-    def _create_activity(self, res_model: str, res_id: int, summary: str, 
-                        note: str = None, activity_type: str = 'todo', due_days: int = 1) -> Dict:
+    def _create_activity(self, res_model: str = None, res_id: int = None, summary: str = None, 
+                        note: str = None, activity_type: str = 'todo', due_days: int = 1, 
+                        view_context: Optional[Dict] = None) -> Dict:
         """Create an activity/reminder for a record"""
         try:
+            # If view context is available and parameters are missing, use context to fill them
+            if view_context and (not res_model or not res_id):
+                if not res_model:
+                    res_model = view_context.get('model', 'res.partner')
+                if not res_id:
+                    res_id = view_context.get('active_id')
+                    
+                _logger.info(f"[Create Activity] Using view context: model={res_model}, res_id={res_id}")
+            
+            # Validate required parameters
+            if not res_model or not res_id or not summary:
+                missing = []
+                if not res_model:
+                    missing.append('res_model')
+                if not res_id:
+                    missing.append('res_id') 
+                if not summary:
+                    missing.append('summary')
+                return {
+                    'success': False,
+                    'error': f'Missing required parameters: {", ".join(missing)}. Use view context or provide explicitly.'
+                }
             # Map activity types to Odoo activity type IDs
             ActivityType = self.env['mail.activity.type']
             
