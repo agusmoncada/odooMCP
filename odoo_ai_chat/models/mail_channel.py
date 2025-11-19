@@ -468,13 +468,16 @@ class MailChannel(models.Model):
                         # Force bus notification to refresh frontend
                         # This ensures the new message appears immediately without manual refresh
                         try:
-                            # Notify all channel members about the new message
+                            # Get the full message data with all required fields
+                            message_data = posted_message._message_notification_values()
+                            # Ensure attachment_ids is always present (even if empty)
+                            if 'attachment_ids' not in message_data:
+                                message_data['attachment_ids'] = []
+                            
+                            # Notify all channel members about the new message with complete data
                             for member in self.channel_member_ids:
                                 if member.partner_id:
-                                    self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
-                                        'id': posted_message.id,
-                                        'channel_id': self.id,
-                                    })
+                                    self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
                             
                             # Also send channel update notification
                             self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
@@ -512,12 +515,15 @@ class MailChannel(models.Model):
                     
                     # Force bus notification for error messages too
                     try:
+                        # Get the full message data with all required fields
+                        message_data = posted_message._message_notification_values()
+                        # Ensure attachment_ids is always present (even if empty)
+                        if 'attachment_ids' not in message_data:
+                            message_data['attachment_ids'] = []
+                        
                         for member in self.channel_member_ids:
                             if member.partner_id:
-                                self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
-                                    'id': posted_message.id,
-                                    'channel_id': self.id,
-                                })
+                                self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
                         _logger.info(f"Sent bus notifications for error message {posted_message.id}")
                     except Exception as bus_error:
                         _logger.warning(f"Failed to send bus notifications for error: {bus_error}")
@@ -1511,13 +1517,16 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 
                 # Force bus notification to refresh frontend for tool call responses
                 try:
-                    # Notify all channel members about the new message
+                    # Get the full message data with all required fields
+                    message_data = posted_message._message_notification_values()
+                    # Ensure attachment_ids is always present (even if empty)
+                    if 'attachment_ids' not in message_data:
+                        message_data['attachment_ids'] = []
+                    
+                    # Notify all channel members about the new message with complete data
                     for member in self.channel_member_ids:
                         if member.partner_id:
-                            self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', {
-                                'id': posted_message.id,
-                                'channel_id': self.id,
-                            })
+                            self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
                     
                     # Also send channel update notification
                     self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
