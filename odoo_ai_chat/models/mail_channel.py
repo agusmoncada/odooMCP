@@ -521,6 +521,12 @@ When user requests "remind me", "create a task", "schedule", or any activity/rem
 - DO NOT ask for clarification if viewing a specific record
 - Example: "remind me to call this client" → create_activity({{"summary": "Call client"}})
 
+⚠️ IMPORTANT: ONLY respond to the CURRENT user message:
+- If user says "hello" or greetings, respond with a greeting ONLY
+- Do NOT execute actions from previous conversations or context
+- Do NOT mix responses to current message with previous requests
+- Each message should be handled independently
+
 USER CONTEXT:
 - Name: {user.name}
 - Language: {user.lang}
@@ -631,7 +637,7 @@ WRONG behavior:
 
 Remember: Execute ALL required tool calls before providing a final text response."""
 
-        # Add current view context if available
+        # Add current view context if available (with automatic cleanup)
         view_context_section = self._get_view_context_section()
         if view_context_section:
             prompt += f"\n\n{view_context_section}"
@@ -651,6 +657,9 @@ Remember: Execute ALL required tool calls before providing a final text response
                 'channel_id': self.id,
             })
             self.ai_session_id = new_session.id
+            
+            # Clear any stale view context
+            self.sudo().write({'current_view_context': None})
             
             # Post a system message about the reset
             self.message_post(
@@ -742,8 +751,17 @@ Remember: Execute ALL required tool calls before providing a final text response
 
             _logger.info(f"[AI Chat] Context age: {age_seconds:.1f} seconds (timestamp: {timestamp}, current: {current_time_ms:.0f})")
 
+            # Check if context is too old (5 minutes) or from a different session
             if timestamp and age_ms > 300000:  # 5 minutes
                 _logger.info(f"[AI Chat] View context is stale ({age_seconds:.1f}s old), ignoring")
+                return None
+                
+            # Additional check: if context is over 1 hour old, always ignore it
+            # This prevents day-old context from affecting new conversations
+            if timestamp and age_ms > 3600000:  # 1 hour
+                _logger.info(f"[AI Chat] View context is very old ({age_seconds:.1f}s), clearing it")
+                # Clear the stale context
+                self.sudo().write({'current_view_context': None})
                 return None
 
             model = context.get('model')
@@ -759,6 +777,9 @@ Remember: Execute ALL required tool calls before providing a final text response
             try:
                 record = self.env[model].browse(active_id)
                 if not record.exists():
+                    _logger.warning(f"[AI Chat] Context references non-existent record {model}({active_id}), clearing context")
+                    # Clear invalid context
+                    self.sudo().write({'current_view_context': None})
                     return None
 
                 # Get display name
@@ -899,7 +920,13 @@ You can use tools like:
 - Records created or modified
 - Decisions or conclusions reached
 
-Keep the summary brief (2-3 paragraphs max) but include enough detail that the conversation can continue naturally."""
+IMPORTANT: Do NOT include:
+- Incomplete or pending actions
+- Requests that were already completed
+- Context from specific record views that may no longer be relevant
+- Any activity creation requests (reminders, tasks, etc.) that were already processed
+
+Keep the summary brief (2-3 paragraphs max) but include enough detail that the conversation can continue naturally. The summary should only include COMPLETED actions and established context, not pending tasks or specific record references."""
 
             # Build messages for summarization call
             summarization_messages = [
