@@ -641,6 +641,9 @@ Remember: Execute ALL required tool calls before providing a final text response
         view_context_section = self._get_view_context_section()
         if view_context_section:
             prompt += f"\n\n{view_context_section}"
+            _logger.info(f"[AI Chat] Including context section in prompt for channel {self.id}")
+        else:
+            _logger.info(f"[AI Chat] No context section available for channel {self.id}")
 
         return prompt
 
