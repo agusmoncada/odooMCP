@@ -354,6 +354,8 @@ class MCPServer:
         """Search for records in a model"""
         try:
             import json
+            _logger.info(f"[MCP] _search_records called: model={model}, domain={domain}, fields={fields}, limit={limit}")
+            
             Model = self.env[model]
             domain = domain or []
 
@@ -361,35 +363,49 @@ class MCPServer:
             if isinstance(domain, str):
                 try:
                     domain = json.loads(domain)
+                    _logger.info(f"[MCP] Parsed domain from string: {domain}")
                 except json.JSONDecodeError:
-                    return {'success': False, 'error': f'Invalid domain format: {domain}'}
+                    error_msg = f'Invalid domain format: {domain}'
+                    _logger.error(f"[MCP] {error_msg}")
+                    return {'success': False, 'error': error_msg}
 
             # Handle fields as string
             if isinstance(fields, str):
                 try:
                     fields = json.loads(fields)
+                    _logger.info(f"[MCP] Parsed fields from string: {fields}")
                 except json.JSONDecodeError:
-                    return {'success': False, 'error': f'Invalid fields format: {fields}'}
+                    error_msg = f'Invalid fields format: {fields}'
+                    _logger.error(f"[MCP] {error_msg}")
+                    return {'success': False, 'error': error_msg}
 
+            _logger.info(f"[MCP] Searching {model} with domain {domain}, limit {limit}")
             records = Model.search(domain, limit=limit)
+            _logger.info(f"[MCP] Found {len(records)} records")
 
             if fields:
                 data = records.read(fields)
             else:
                 data = records.read()
 
-            return {
+            result = {
                 'success': True,
                 'count': len(data),
                 'records': self._sanitize_for_json(data)
             }
+            _logger.info(f"[MCP] _search_records returning success with {len(data)} records")
+            return result
         except KeyError as e:
+            error_msg = f"Model '{model}' not found. The required module may not be installed."
+            _logger.error(f"[MCP] {error_msg}")
             return {
                 'success': False,
-                'error': f"Model '{model}' not found. The required module may not be installed."
+                'error': error_msg
             }
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            error_msg = str(e)
+            _logger.error(f"[MCP] _search_records exception: {error_msg}")
+            return {'success': False, 'error': error_msg}
 
     def _read_record(self, model: str, record_id: int, fields: List = None) -> Dict:
         """Read a specific record"""

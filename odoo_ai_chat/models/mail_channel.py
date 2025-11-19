@@ -465,33 +465,9 @@ class MailChannel(models.Model):
                             subtype_xmlid='mail.mt_comment'
                         )
                         
-                        # Force bus notification to refresh frontend
-                        # This ensures the new message appears immediately without manual refresh
-                        try:
-                            # Get the full message data with all required fields
-                            message_data = {
-                                'id': posted_message.id,
-                                'channel_id': self.id,
-                                'author_id': posted_message.author_id.id if posted_message.author_id else False,
-                                'body': posted_message.body,
-                                'date': posted_message.date.isoformat() if posted_message.date else False,
-                                'attachment_ids': [],  # Always include attachment_ids (empty for now)
-                                'message_type': posted_message.message_type,
-                            }
-                            
-                            # Notify all channel members about the new message with complete data
-                            for member in self.channel_member_ids:
-                                if member.partner_id:
-                                    self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
-                            
-                            # Also send channel update notification
-                            self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
-                                'id': self.id,
-                                'last_interest_dt': fields.Datetime.now().isoformat(),
-                            })
-                            _logger.info(f"Sent bus notifications for AI message {posted_message.id}")
-                        except Exception as bus_error:
-                            _logger.warning(f"Failed to send bus notifications: {bus_error}")
+                        # Let Odoo handle bus notifications automatically after commit
+                        # Manual bus notifications were causing frontend errors
+                        _logger.info(f"Posted AI message {posted_message.id}, Odoo will send notifications after commit")
                         
                         # Commit - Odoo will send bus notifications automatically after commit
                         self.env.cr.commit()
@@ -518,25 +494,8 @@ class MailChannel(models.Model):
                         subtype_xmlid='mail.mt_comment'
                     )
                     
-                    # Force bus notification for error messages too
-                    try:
-                        # Get the full message data with all required fields
-                        message_data = {
-                            'id': posted_message.id,
-                            'channel_id': self.id,
-                            'author_id': posted_message.author_id.id if posted_message.author_id else False,
-                            'body': posted_message.body,
-                            'date': posted_message.date.isoformat() if posted_message.date else False,
-                            'attachment_ids': [],  # Always include attachment_ids (empty for now)
-                            'message_type': posted_message.message_type,
-                        }
-                        
-                        for member in self.channel_member_ids:
-                            if member.partner_id:
-                                self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
-                        _logger.info(f"Sent bus notifications for error message {posted_message.id}")
-                    except Exception as bus_error:
-                        _logger.warning(f"Failed to send bus notifications for error: {bus_error}")
+                    # Let Odoo handle bus notifications automatically after commit
+                    _logger.info(f"Posted error message {posted_message.id}, Odoo will send notifications after commit")
                     
                     # Commit to save the error message
                     self.env.cr.commit()
@@ -1357,6 +1316,11 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                             _logger.info(f"[Tool Execution] Debug - context_section: {bool(context_section)}, current_view_context: {bool(self.current_view_context)}")
 
                         result = mcp_server.call_tool(tool_name, tool_args, view_context=view_context)
+                        
+                        # Log the actual tool result for debugging
+                        _logger.info(f"[Tool Execution] {tool_name} result: success={result.get('success')}, error={result.get('error', 'None')}")
+                        if not result.get('success') and result.get('error'):
+                            _logger.error(f"[Tool Execution] {tool_name} failed with error: {result['error']}")
 
                         # Extract graph data if this was a generate_graph call
                         if tool_name == 'generate_graph' and result.get('success') and result.get('image_base64'):
@@ -1525,32 +1489,8 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                     subtype_xmlid='mail.mt_comment'
                 )
                 
-                # Force bus notification to refresh frontend for tool call responses
-                try:
-                    # Get the full message data with all required fields
-                    message_data = {
-                        'id': posted_message.id,
-                        'channel_id': self.id,
-                        'author_id': posted_message.author_id.id if posted_message.author_id else False,
-                        'body': posted_message.body,
-                        'date': posted_message.date.isoformat() if posted_message.date else False,
-                        'attachment_ids': [],  # Always include attachment_ids (empty for now)
-                        'message_type': posted_message.message_type,
-                    }
-                    
-                    # Notify all channel members about the new message with complete data
-                    for member in self.channel_member_ids:
-                        if member.partner_id:
-                            self.env['bus.bus']._sendone(member.partner_id, 'mail.channel/new_message', message_data)
-                    
-                    # Also send channel update notification
-                    self.env['bus.bus']._sendone(self, 'mail.channel/last_interest_dt_changed', {
-                        'id': self.id,
-                        'last_interest_dt': fields.Datetime.now().isoformat(),
-                    })
-                    _logger.info(f"Sent bus notifications for tool call AI message {posted_message.id}")
-                except Exception as bus_error:
-                    _logger.warning(f"Failed to send bus notifications for tool calls: {bus_error}")
+                # Let Odoo handle bus notifications automatically after commit
+                _logger.info(f"Posted tool call AI message {posted_message.id}, Odoo will send notifications after commit")
                 
                 # Commit - Odoo will send bus notifications automatically after commit
                 self.env.cr.commit()
