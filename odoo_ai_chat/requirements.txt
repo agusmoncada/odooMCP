@@ -1,12 +1,83 @@
-# ✅ ZERO DEPENDENCIES NEEDED!
-# This addon uses lightweight alternatives compatible with Odoo v16
+# =============================================================================
+# odoo_ai_chat - AI Assistant Addon Dependencies
+# =============================================================================
+# 
+# This file lists all Python dependencies required for the AI Chat addon.
+# Install with: pip install -r requirements.txt
+#
+# =============================================================================
 
-# No pip install required! The addon now uses:
-# - PyPDF2 (already in Odoo v16) instead of pdfplumber
-# - Pure Python stdlib instead of pandas/numpy
-# - Odoo's built-in tools instead of Pillow
+# -----------------------------------------------------------------------------
+# CORE DEPENDENCIES (Required)
+# -----------------------------------------------------------------------------
 
-# Optional: Only if PyPDF2 is somehow missing from your Odoo
-# PyPDF2>=1.26.0,<4.0.0
+# HTTP requests for OpenRouter API calls
+requests>=2.25.0
 
-# See /requirements.txt in repo root for full documentation
+# Graph/Chart generation
+matplotlib>=3.5.0
+
+# Image processing (required for graphs and PDF processing)
+Pillow>=8.0.0
+
+# -----------------------------------------------------------------------------
+# PDF PROCESSING DEPENDENCIES
+# -----------------------------------------------------------------------------
+
+# Core PDF text extraction (usually included in Odoo v16)
+PyPDF2>=1.26.0,<4.0.0
+
+# OCR Support for scanned/image-based PDFs
+pytesseract>=0.3.10
+pdf2image>=1.16.0
+
+# -----------------------------------------------------------------------------
+# SYSTEM PACKAGES (install via apt-get, not pip)
+# -----------------------------------------------------------------------------
+# 
+# For OCR support, install these system packages:
+#   apt-get update && apt-get install -y \
+#     tesseract-ocr \
+#     tesseract-ocr-eng \
+#     tesseract-ocr-spa \
+#     poppler-utils
+#
+# - tesseract-ocr: OCR engine for text extraction from images
+# - tesseract-ocr-eng: English language pack
+# - tesseract-ocr-spa: Spanish language pack (optional)
+# - poppler-utils: PDF to image conversion (required by pdf2image)
+#
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# OPTIONAL DEPENDENCIES
+# -----------------------------------------------------------------------------
+
+# For better PDF text extraction (alternative to PyPDF2)
+# pdfplumber>=0.7.0
+
+# For advanced numerical operations in charts
+# numpy>=1.20.0
+
+# -----------------------------------------------------------------------------
+# NOTES
+# -----------------------------------------------------------------------------
+#
+# 1. The addon uses OpenRouter API for AI capabilities. You need to:
+#    - Get an API key from https://openrouter.ai
+#    - Configure it in Odoo Settings > AI Chat > OpenRouter API Key
+#
+# 2. Supported AI models via OpenRouter:
+#    - anthropic/claude-3-5-sonnet (recommended)
+#    - anthropic/claude-3-opus
+#    - openai/gpt-4-turbo
+#    - openai/gpt-3.5-turbo
+#    - google/gemini-pro
+#    - And many more...
+#
+# 3. For PDF invoice processing with OCR:
+#    - Install system packages (tesseract-ocr, poppler-utils)
+#    - Install Python packages (pytesseract, pdf2image)
+#    - Without OCR, only text-based PDFs will work
+#
+# =============================================================================

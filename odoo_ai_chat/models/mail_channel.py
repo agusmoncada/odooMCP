@@ -158,6 +158,30 @@ class MailChannel(models.Model):
             _logger.info(f"[TIMING] Message received at {start_time}, starting async thread")
             # Get message content before starting thread (avoid cursor issues)
             message_body = message.body or ''
+
+            # Capture attachment information for PDF processing
+            attachment_info = []
+            if message.attachment_ids:
+                for att in message.attachment_ids:
+                    att_data = {
+                        'id': att.id,
+                        'name': att.name,
+                        'mimetype': att.mimetype,
+                        'file_size': att.file_size,
+                    }
+                    attachment_info.append(att_data)
+                    _logger.info(f"[AI Chat] Captured attachment: {att.name} (ID: {att.id}, type: {att.mimetype})")
+
+            # If there are PDF attachments, append info to message body so AI knows about them
+            if attachment_info:
+                pdf_attachments = [a for a in attachment_info if a['mimetype'] == 'application/pdf' or a['name'].lower().endswith('.pdf')]
+                if pdf_attachments:
+                    pdf_info = "\n\n[ATTACHED PDF FILES - Use process_pdf_invoice tool to process these]:\n"
+                    for pdf in pdf_attachments:
+                        pdf_info += f"- {pdf['name']} (attachment_id: {pdf['id']})\n"
+                    message_body = message_body + pdf_info
+                    _logger.info(f"[AI Chat] Added PDF attachment info to message: {len(pdf_attachments)} PDFs")
+
             _logger.info(f"Thread params: dbname={self.env.cr.dbname}, uid={self.env.uid}, channel_id={self.id}, message_body_length={len(message_body)}")
             # Process AI message asynchronously to avoid blocking the UI
             # Use threading to process in background with a new cursor
@@ -321,6 +345,18 @@ class MailChannel(models.Model):
                 ('email', '=', 'ai.assistant@odoo.local')
             ], limit=1)
 
+            # Check for /reset command FIRST before any processing
+            # Supports English and Spanish commands
+            import re
+            clean_check = re.sub(r'<[^>]+>', '', user_message_body).strip().lower()
+            reset_commands = [
+                '/reset', '/clear', '/new', '/restart',  # English
+                '/reiniciar', '/limpiar', '/nuevo', '/borrar',  # Spanish
+            ]
+            if clean_check in reset_commands:
+                self._handle_reset_command(ai_bot)
+                return
+
             if ai_bot:
                 # Send typing indicator IMMEDIATELY and commit so user sees it right away
                 self._send_typing_notification(True, ai_bot)
@@ -363,19 +399,20 @@ class MailChannel(models.Model):
             # Build context-aware system prompt
             system_prompt = self._build_context_aware_prompt()
 
-            # Get messages for API
-            messages = session.get_messages_for_api()
-            
+            # Get messages for API with a reasonable limit to prevent memory/timeout issues
+            # We limit to 30 messages max - older messages will be summarized or dropped
+            # This prevents loading hundreds of messages from the database and keeps API calls fast
+            messages = session.get_messages_for_api(max_messages=30)
+
             # Clean up orphaned tool sequences for Anthropic models
             if is_anthropic_model:
                 messages = self._clean_tool_sequences_for_anthropic(messages)
 
             # Summarize conversation history if too long to prevent API errors
-            # Increased threshold from 20 to 30 to reduce summarization overhead
-            # Summarization adds 1-3 seconds per request
-            if len(messages) > 30:
+            # Trigger summarization at 15 messages to keep API calls fast
+            if len(messages) > 15:
                 _logger.info(f"Conversation long ({len(messages)} messages), creating summary")
-                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model)
+                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model, session=session)
 
             # Add system prompt
             messages.insert(0, {
@@ -515,17 +552,21 @@ class MailChannel(models.Model):
         prompt = f"""You are an expert Odoo ERP assistant integrated into the Discuss messaging interface.
 You help users with data queries, record creation/updates, and workflow tasks.
 
-🚨 PRIORITY RULE FOR ACTIVITY CREATION:
-When user requests "remind me", "create a task", "schedule", or any activity/reminder request:
-- IMMEDIATELY call create_activity tool with the summary parameter
-- DO NOT ask for clarification if viewing a specific record
-- Example: "remind me to call this client" → create_activity({{"summary": "Call client"}})
+🚨 CRITICAL RULE - ONE ACTION PER REQUEST:
+When user requests "remind me", "create a task", "schedule", or any activity/reminder:
+- Create ONLY ONE activity for the CURRENT context
+- If viewing a specific record, create activity for THAT record only
+- DO NOT create activities for records mentioned earlier in conversation
+- DO NOT loop through previous conversation to create multiple activities
+- Example: "remind me to call this client" → ONE create_activity call, not multiple
 
 ⚠️ IMPORTANT: ONLY respond to the CURRENT user message:
 - If user says "hello" or greetings, respond with a greeting ONLY
 - Do NOT execute actions from previous conversations or context
 - Do NOT mix responses to current message with previous requests
-- Each message should be handled independently
+- Each message should be handled INDEPENDENTLY
+- NEVER batch operations from conversation history
+- NEVER create multiple records when user asks for ONE thing
 
 USER CONTEXT:
 - Name: {user.name}
@@ -556,13 +597,18 @@ CRITICAL INSTRUCTIONS FOR TOOL USAGE:
 - Continue using tools until the ENTIRE task is complete
 - Only provide a summary response AFTER all operations are finished
 
-MANDATORY ACTIVITY CREATION:
-- If user requests reminders, tasks, or follow-ups (e.g., "remind me to call", "create a task", "schedule"), IMMEDIATELY use create_activity tool
-- DO NOT ask for clarification if view context shows current record - USE IT
-- Examples requiring IMMEDIATE tool use:
-  * "remind me to call this client" → create_activity with summary="Call client"
-  * "create a task to follow up" → create_activity with summary="Follow up"
-  * "remind me to review this" → create_activity with summary="Review record"
+MANDATORY ACTIVITY CREATION (SINGLE ACTIVITY ONLY):
+- If user requests a reminder/task, create EXACTLY ONE activity
+- Use the CURRENT view context if available (the record user is currently viewing)
+- If no view context, create ONE generic activity
+- NEVER create multiple activities from conversation history
+- NEVER loop through past messages to find records to create activities for
+- Examples:
+  * "remind me to call this client" → ONE create_activity with summary="Call client"
+  * "create a task to follow up" → ONE create_activity with summary="Follow up"
+  * "remind me to review this" → ONE create_activity with summary="Review record"
+- WRONG: Creating activities for every client/invoice mentioned in conversation
+- RIGHT: Creating ONE activity for the current context only
 
 ERROR HANDLING AND DUPLICATES:
 - When a tool call fails (e.g., duplicate record), CONTINUE with other tasks
@@ -610,6 +656,45 @@ Available tools:
 - create_activity: Create activities/reminders (if user is viewing a record, just provide summary - context is automatic)
 - read_group: Aggregate data (use for sums, totals, counts grouped by field)
 - generate_graph: Create visualizations when explicitly requested
+- process_pdf_invoice: Process PDF invoice files to create vendor bills (THIS IS THE ONLY TOOL FOR PDF INVOICES)
+
+🚨 PDF INVOICE PROCESSING - CRITICAL:
+When a user uploads a PDF invoice (you'll see "[ATTACHED PDF FILES]" in the message):
+1. ALWAYS use the process_pdf_invoice tool - NEVER try to create invoices manually with create_record
+2. Pass the attachment_id from the message (e.g., process_pdf_invoice(attachment_id=143))
+3. The tool automatically:
+   - Extracts text from PDF using OCR
+   - Parses invoice data with AI
+   - Finds or creates the vendor (with VAT matching)
+   - Matches products using multi-tier matching (exact → supplier → fuzzy → AI → placeholder)
+   - Creates the vendor bill in DRAFT state
+   - Attaches the PDF to the invoice
+   - Creates a review activity
+   - Posts a processing summary to the invoice chatter
+4. DO NOT manually create account.move records for PDF invoices - use process_pdf_invoice instead!
+
+⚠️ IMPORTANT - DO NOT RE-PROCESS PDFs:
+- Only call process_pdf_invoice ONCE per PDF attachment
+- If you already processed a PDF successfully in THIS conversation, DO NOT process it again
+- Follow-up questions like "remind me to call this client" should NOT trigger PDF re-processing
+- The attachment info appears in the original message only - don't look for it in follow-ups
+- If user asks to process a PDF again, first check if it was already processed and inform them
+
+PROJECT CREATION GUIDE:
+When creating a project with stages, tags, and tasks, use these models:
+1. Project: model="project.project", values={{"name": "Project Name", "description": "Description text"}}
+2. Stages: model="project.task.type", values={{"name": "Stage Name", "project_ids": [[6, 0, [PROJECT_ID]]]}}
+3. Tags: model="project.tags", values={{"name": "Tag Name"}}
+4. Tasks: model="project.task", values={{"name": "Task Name", "project_id": PROJECT_ID, "stage_id": STAGE_ID, "description": "Description", "tag_ids": [[6, 0, [TAG_IDS]]]}}
+
+For software development projects, create these stages in order:
+- Backlog (sequence: 1)
+- In Progress (sequence: 2)
+- Code Review (sequence: 3)
+- Testing (sequence: 4)
+- Done (sequence: 5)
+
+Common software project tags: Bug, Feature, Enhancement, Documentation, Urgent
 
 TOOL EFFICIENCY RULES:
 - For quotations, ALWAYS use domain: [["state", "=", "draft"]] with model "sale.order" 
@@ -635,7 +720,28 @@ WRONG behavior:
   1. Call create_record for res.partner
   2. Respond: "Customer created. Now I will create the project..." ← NEVER DO THIS!
 
-Remember: Execute ALL required tool calls before providing a final text response."""
+🚨 CRITICAL: ACCURATE REPORTING OF RESULTS
+When providing your final response, you MUST:
+1. Report the EXACT names and IDs from the tool results you received
+2. NEVER confuse results from the CURRENT request with previous requests
+3. If you created a project called "development", say "development" NOT any other name
+4. Always include the actual ID returned (e.g., "Project 'development' (ID: 45)")
+5. List EACH item you created with its actual name from the tool result
+
+EXAMPLE - Correct final response:
+After creating project "development" (tool returned: record_id=45, name="development"):
+"✅ Created project 'development' (ID: 45)
+✅ Created stages: Discovery, Design, Development, Testing, Deployment
+✅ Created tags: Bug, Feature, Enhancement
+✅ Created example tasks: Setup, First Sprint, Code Review"
+
+WRONG final response:
+"Great, the project 'develop55' has been set up..." ← WRONG if you created "development"!
+
+Remember:
+- Read the ACTUAL tool result content to get the correct names
+- The record_id and record.name in tool results are the TRUTH
+- Execute ALL required tool calls before providing a final text response."""
 
         # Add current view context if available (with automatic cleanup)
         view_context_section = self._get_view_context_section()
@@ -647,12 +753,42 @@ Remember: Execute ALL required tool calls before providing a final text response
 
         return prompt
 
+    def _handle_reset_command(self, ai_bot=None):
+        """Handle /reset command from user"""
+        try:
+            # Reset the session
+            self.action_reset_ai_conversation()
+
+            # Check user's language for response
+            user_lang = self.env.user.lang or 'en_US'
+            is_spanish = user_lang.startswith('es')
+
+            if is_spanish:
+                message = "<p>🔄 <strong>¡Conversación reiniciada!</strong></p><p>He borrado mi memoria de nuestra conversación anterior. Empezamos de nuevo.</p><p>¿En qué puedo ayudarte?</p>"
+            else:
+                message = "<p>🔄 <strong>Conversation reset!</strong></p><p>I've cleared my memory of our previous conversation. We're starting fresh now.</p><p>How can I help you?</p>"
+
+            # Post confirmation as AI
+            if ai_bot:
+                self.message_post(
+                    body=message,
+                    author_id=ai_bot.id,
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment'
+                )
+
+            self.env.cr.commit()
+            _logger.info(f"[AI Chat] Conversation reset via command for channel {self.id}")
+
+        except Exception as e:
+            _logger.error(f"[AI Chat] Error handling reset command: {e}")
+
     def action_reset_ai_conversation(self):
         """Reset the AI conversation by clearing corrupted message history"""
         if hasattr(self, 'ai_session_id') and self.ai_session_id:
             # Archive the old session with corrupted history
             self.ai_session_id.write({'active': False})
-            
+
             # Create a fresh session
             new_session = self.env['ai.chat.session'].create({
                 'name': 'AI Assistant Chat (Reset)',
@@ -660,15 +796,17 @@ Remember: Execute ALL required tool calls before providing a final text response
                 'channel_id': self.id,
             })
             self.ai_session_id = new_session.id
-            
+
             # Clear any stale view context
             self.sudo().write({'current_view_context': None})
-            
-            # Post a system message about the reset
-            self.message_post(
-                body="<p><em>🔄 AI conversation has been reset due to technical issues. You can continue chatting normally.</em></p>",
-                message_type='notification'
-            )
+        else:
+            # No existing session, just create a new one
+            new_session = self.env['ai.chat.session'].create({
+                'name': 'AI Assistant Chat',
+                'user_id': self.env.user.id,
+                'channel_id': self.id,
+            })
+            self.ai_session_id = new_session.id
 
     def update_view_context(self, context_data):
         """Update the current view context for this channel
@@ -678,39 +816,112 @@ Remember: Execute ALL required tool calls before providing a final text response
         """
         try:
             _logger.info(f"[AI Chat] update_view_context called for channel {self.id} ({self.name})")
-            _logger.info(f"[AI Chat] Context data received: {context_data}")
 
             # Ensure we have the required fields
             if not context_data.get('model') or not context_data.get('active_id'):
                 _logger.warning(f"[AI Chat] Invalid context data: missing model or active_id")
                 return
 
-            # Store as JSON with explicit write to ensure transaction integrity  
+            # Store as JSON
             context_json = json.dumps(context_data)
-            
-            # Use sudo().write() for more reliable persistence
-            self.sudo().write({'current_view_context': context_json})
-            
-            # Force write to database
-            self.env.cr.commit()
+            channel_id = self.id
 
-            _logger.info(f"[AI Chat] Updated and committed view context for channel {self.name}: {context_data.get('model')} - {context_data.get('active_id')}")
-
-            # Verify it was saved by invalidating cache and reading again
-            self.env.invalidate_all()
-            saved_context = self.current_view_context
-            _logger.info(f"[AI Chat] Verification - saved context length: {len(saved_context) if saved_context else 0}")
-            
-            if saved_context:
-                # Parse back to verify integrity
+            # Use a NEW cursor to avoid conflicts with ongoing AI transactions
+            # This prevents "could not serialize access due to concurrent update" errors
+            with self.pool.cursor() as new_cr:
+                new_env = api.Environment(new_cr, self.env.uid, self.env.context)
                 try:
-                    parsed = json.loads(saved_context)
-                    _logger.info(f"[AI Chat] Verified context: model={parsed.get('model')}, active_id={parsed.get('active_id')}")
-                except json.JSONDecodeError as je:
-                    _logger.error(f"[AI Chat] Context JSON is corrupted: {je}")
+                    # Direct SQL update to avoid ORM locking issues
+                    new_cr.execute("""
+                        UPDATE mail_channel
+                        SET current_view_context = %s, write_date = NOW()
+                        WHERE id = %s
+                    """, (context_json, channel_id))
+                    new_cr.commit()
+                    _logger.info(f"[AI Chat] Updated view context for channel {channel_id}: {context_data.get('model')} - {context_data.get('active_id')}")
+                except Exception as e:
+                    _logger.warning(f"[AI Chat] Could not update view context: {e}")
+                    new_cr.rollback()
                     
         except Exception as e:
             _logger.error(f"[AI Chat] Failed to update view context: {e}", exc_info=True)
+
+    def _safe_parse_json(self, json_str):
+        """Safely parse JSON string, attempting to fix common AI model issues.
+
+        AI models sometimes return malformed JSON with issues like:
+        - Missing quotes around keys
+        - Trailing commas
+        - Single quotes instead of double quotes
+        - Unescaped special characters
+
+        Args:
+            json_str: The JSON string to parse
+
+        Returns:
+            Parsed JSON object (dict or list)
+
+        Raises:
+            json.JSONDecodeError: If JSON cannot be parsed even after fixes
+        """
+        import re
+
+        if not json_str or not json_str.strip():
+            return {}
+
+        # First try direct parsing
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+        # Try to fix common issues
+        fixed_str = json_str
+
+        # Replace single quotes with double quotes (be careful with apostrophes in text)
+        # Only replace single quotes that look like JSON delimiters
+        try:
+            # This regex matches single quotes around keys/values but not in the middle of words
+            fixed_str = re.sub(r"(?<=[{,:\[])\s*'([^']+)'\s*(?=[},:\]])", r'"\1"', fixed_str)
+        except Exception:
+            pass
+
+        # Remove trailing commas before closing brackets
+        try:
+            fixed_str = re.sub(r',\s*([}\]])', r'\1', fixed_str)
+        except Exception:
+            pass
+
+        # Try parsing again
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+
+        # Last resort: try to extract key-value pairs manually for simple objects
+        if fixed_str.strip().startswith('{') and fixed_str.strip().endswith('}'):
+            try:
+                # Very basic extraction for simple key-value objects
+                content = fixed_str.strip()[1:-1]
+                result = {}
+                # Match patterns like "key": "value" or "key": number
+                pairs = re.findall(r'"?(\w+)"?\s*:\s*(?:"([^"]*)"|([\d.]+)|(true|false|null))', content)
+                for key, str_val, num_val, bool_val in pairs:
+                    if str_val:
+                        result[key] = str_val
+                    elif num_val:
+                        result[key] = float(num_val) if '.' in num_val else int(num_val)
+                    elif bool_val:
+                        result[key] = {'true': True, 'false': False, 'null': None}.get(bool_val)
+                if result:
+                    _logger.info(f"[JSON Recovery] Extracted {len(result)} key-value pairs from malformed JSON")
+                    return result
+            except Exception as e:
+                _logger.warning(f"[JSON Recovery] Failed to extract key-value pairs: {e}")
+
+        # If all else fails, raise the original error
+        _logger.error(f"[JSON Parse] Could not parse JSON: {json_str[:200]}")
+        raise json.JSONDecodeError("Could not parse JSON after multiple attempts", json_str, 0)
 
     def _get_view_context_section(self):
         """Build the view context section for the AI prompt
@@ -874,21 +1085,50 @@ You can use tools like:
             _logger.error(f"[AI Chat] Error building view context section: {e}")
             return None
 
-    def _summarize_conversation(self, messages, api_key, model):
+    def _summarize_conversation(self, messages, api_key, model, session=None):
         """Summarize older messages when conversation gets too long
 
         This method creates a summary of older messages to reduce token usage
         while preserving recent context (similar to Claude's approach).
 
+        If a session is provided, the summary is stored persistently and reused.
+
         Args:
             messages: List of conversation messages
             api_key: OpenRouter API key
             model: Model to use for summarization
+            session: Optional ai.chat.session record for persistent storage
 
         Returns:
             List of messages with summary + recent messages
         """
         try:
+            # Check if we have a persistent summary we can use
+            if session and session.conversation_summary:
+                # We have a stored summary - use it instead of regenerating
+                total_messages = session.message_count
+                summarized_count = session.summarized_message_count or 0
+
+                # Only regenerate if we have significantly more messages than summarized
+                # (more than 20 new messages since last summary)
+                if total_messages - summarized_count < 20:
+                    _logger.info(f"Using persistent summary (covers {summarized_count} messages, {total_messages - summarized_count} new)")
+                    # Keep last 15 messages for context
+                    recent_messages = messages[-15:] if len(messages) > 15 else messages
+
+                    # Clean recent messages for tool sequences
+                    while recent_messages and recent_messages[0].get('role') == 'tool':
+                        recent_messages.pop(0)
+                    if recent_messages and recent_messages[-1].get('role') == 'assistant' and recent_messages[-1].get('tool_calls'):
+                        recent_messages.pop()
+
+                    if recent_messages:
+                        summary_message = {
+                            'role': 'system',
+                            'content': f"[Previous conversation summary]\n{session.conversation_summary}\n[End of summary - continuing with recent messages]"
+                        }
+                        return [summary_message] + recent_messages
+
             # Keep last 10 messages intact for immediate context
             # Summarize everything before that
             recent_messages = messages[-10:]
@@ -936,6 +1176,13 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 {'role': 'system', 'content': summary_prompt}
             ]
 
+            # If we have an existing summary, include it to build upon
+            if session and session.conversation_summary:
+                summarization_messages.append({
+                    'role': 'system',
+                    'content': f"[Previous summary to update/expand]\n{session.conversation_summary}"
+                })
+
             # Add old messages to summarize
             for msg in old_messages:
                 # Skip tool messages in summary - they're too verbose
@@ -960,6 +1207,17 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                 summary_text = summary_response['choices'][0]['message'].get('content', '')
 
                 if summary_text:
+                    # Store the summary persistently if we have a session
+                    if session:
+                        try:
+                            session.sudo().write({
+                                'conversation_summary': summary_text,
+                                'summarized_message_count': session.message_count
+                            })
+                            _logger.info(f"Stored persistent summary for session {session.id}")
+                        except Exception as e:
+                            _logger.warning(f"Could not store persistent summary: {e}")
+
                     # Create summary message and prepend to recent messages
                     summary_message = {
                         'role': 'system',
@@ -1068,7 +1326,8 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
         # Log request details for debugging
         _logger.info(f"OpenRouter API call: {len(messages)} messages, tools={'yes' if tools else 'no'}")
 
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        # Increased timeout to 120 seconds for complex multi-tool operations
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
 
         # Better error handling - log response body on error
         if not response.ok:
@@ -1237,41 +1496,83 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
     def _clean_tool_sequences_for_anthropic(self, messages):
         """Clean up orphaned tool messages that break Anthropic format validation
-        
-        Anthropic requires that every tool result has a corresponding tool call.
-        This method removes orphaned tool messages and incomplete sequences.
+
+        Anthropic requires that every tool result has a corresponding tool call in the
+        IMMEDIATELY PRECEDING assistant message. This method:
+        1. Removes orphaned tool messages
+        2. Removes tool messages whose tool_call_id doesn't match the preceding assistant's tool_calls
+        3. Removes incomplete sequences
         """
         try:
             cleaned_messages = []
             i = 0
-            
+
+            # First pass: collect all valid tool_use IDs from assistant messages and their positions
+            assistant_tool_ids = {}  # Maps tool_call_id -> index of assistant message
+
+            for idx, msg in enumerate(messages):
+                if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                    tool_calls = msg.get('tool_calls', [])
+                    if isinstance(tool_calls, str):
+                        try:
+                            tool_calls = json.loads(tool_calls)
+                        except:
+                            tool_calls = []
+                    for tc in tool_calls:
+                        tc_id = tc.get('id') or tc.get('tool_call_id')
+                        if tc_id:
+                            assistant_tool_ids[tc_id] = idx
+
             while i < len(messages):
                 msg = messages[i]
                 role = msg.get('role')
-                
+
                 if role == 'tool':
-                    # Skip orphaned tool messages (tool without preceding assistant with tool_calls)
-                    if not cleaned_messages or cleaned_messages[-1].get('role') != 'assistant' or not cleaned_messages[-1].get('tool_calls'):
-                        _logger.info(f"Skipping orphaned tool message at position {i}")
+                    tool_call_id = msg.get('tool_call_id')
+
+                    # Check 1: Must have a preceding assistant message with tool_calls
+                    if not cleaned_messages or cleaned_messages[-1].get('role') != 'assistant':
+                        _logger.info(f"Skipping tool message at {i}: no preceding assistant message")
                         i += 1
                         continue
-                        
+
+                    # Check 2: The preceding assistant must have tool_calls
+                    prev_assistant = cleaned_messages[-1]
+                    if not prev_assistant.get('tool_calls'):
+                        _logger.info(f"Skipping tool message at {i}: preceding assistant has no tool_calls")
+                        i += 1
+                        continue
+
+                    # Check 3: The tool_call_id must be in the preceding assistant's tool_calls
+                    prev_tool_calls = prev_assistant.get('tool_calls', [])
+                    if isinstance(prev_tool_calls, str):
+                        try:
+                            prev_tool_calls = json.loads(prev_tool_calls)
+                        except:
+                            prev_tool_calls = []
+
+                    prev_tool_ids = {tc.get('id') or tc.get('tool_call_id') for tc in prev_tool_calls}
+
+                    if tool_call_id not in prev_tool_ids:
+                        _logger.info(f"Skipping tool message at {i}: tool_call_id {tool_call_id} not in preceding assistant's tool_calls {prev_tool_ids}")
+                        i += 1
+                        continue
+
                 elif role == 'assistant' and msg.get('tool_calls'):
                     # For assistant messages with tool calls, check if all tool calls have responses
                     tool_calls = msg.get('tool_calls', [])
-                    
+
                     # Look ahead to see if we have tool responses for all tool calls
                     tool_call_ids = set()
                     if isinstance(tool_calls, str):
                         try:
-                            import json
                             tool_calls_data = json.loads(tool_calls)
-                            tool_call_ids = {tc.get('tool_call_id') for tc in tool_calls_data}
+                            tool_call_ids = {tc.get('id') or tc.get('tool_call_id') for tc in tool_calls_data}
                         except:
                             pass
                     else:
-                        tool_call_ids = {tc.get('id') for tc in tool_calls}
-                    
+                        tool_call_ids = {tc.get('id') or tc.get('tool_call_id') for tc in tool_calls}
+
                     # Check if we have responses for all tool calls
                     j = i + 1
                     found_tool_responses = set()
@@ -1281,22 +1582,22 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
                         if tool_call_id in tool_call_ids:
                             found_tool_responses.add(tool_call_id)
                         j += 1
-                    
+
                     # If not all tool calls have responses, skip this assistant message and its partial responses
                     if tool_call_ids and found_tool_responses != tool_call_ids:
-                        _logger.info(f"Skipping assistant message with incomplete tool sequence at position {i}")
+                        _logger.info(f"Skipping assistant message with incomplete tool sequence at position {i}: expected {tool_call_ids}, found {found_tool_responses}")
                         i = j  # Skip to after the tool messages
                         continue
-                
+
                 cleaned_messages.append(msg)
                 i += 1
-            
+
             removed_count = len(messages) - len(cleaned_messages)
             if removed_count > 0:
                 _logger.info(f"Cleaned up {removed_count} orphaned/incomplete tool messages for Anthropic compatibility")
-            
+
             return cleaned_messages
-            
+
         except Exception as e:
             _logger.error(f"Error cleaning tool sequences: {e}")
             return messages
@@ -1318,7 +1619,7 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
         # Allow up to 5 iterations to prevent excessive API usage
         # Most tasks should complete in 2-3 iterations, complex workflows in 4-5
-        max_iterations = 5  # Reduced from 20 to prevent API fatigue and excessive costs
+        max_iterations = 15  # Increased to allow complex multi-step tasks
         
         # Track successful tool calls to avoid redundancy
         successful_tools = set()
@@ -1336,10 +1637,19 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
             # Create assistant message with tool calls
             tool_calls_data = []
             for tc in current_tool_calls:
+                # Safely parse arguments JSON - AI models sometimes return malformed JSON
+                try:
+                    args_str = tc['function']['arguments']
+                    # Try to fix common JSON issues from AI models
+                    parsed_args = self._safe_parse_json(args_str)
+                except Exception as e:
+                    _logger.warning(f"Failed to parse tool arguments for {tc['function']['name']}: {e}, raw: {tc['function']['arguments'][:100]}")
+                    parsed_args = {}
+
                 tool_calls_data.append({
                     'tool_call_id': tc['id'],
                     'name': tc['function']['name'],
-                    'arguments': json.loads(tc['function']['arguments'])
+                    'arguments': parsed_args
                 })
 
             self.env['ai.chat.message'].create({
@@ -1357,7 +1667,12 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
 
                 try:
                     tool_name = tc['function']['name']
-                    tool_args = json.loads(tc['function']['arguments'])
+                    # Safely parse arguments JSON
+                    try:
+                        tool_args = self._safe_parse_json(tc['function']['arguments'])
+                    except Exception as parse_err:
+                        _logger.warning(f"Failed to parse tool arguments: {parse_err}")
+                        tool_args = {}
 
                     _logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
 
@@ -1449,18 +1764,18 @@ Keep the summary brief (2-3 paragraphs max) but include enough detail that the c
             # IMPORTANT: Keep tools enabled so AI can make additional calls if needed
             _logger.info("Calling AI again with tool results (tools still enabled)")
 
-            # Get updated messages including tool results
-            messages = session.get_messages_for_api()
-            
+            # Get updated messages including tool results (limit to prevent memory issues)
+            messages = session.get_messages_for_api(max_messages=30)
+
             # Clean up tool sequences for Anthropic models in iterations too
             is_anthropic_model = openrouter_model.startswith('anthropic/')
             if is_anthropic_model:
                 messages = self._clean_tool_sequences_for_anthropic(messages)
 
             # Summarize conversation if too long
-            if len(messages) > 20:
+            if len(messages) > 15:
                 _logger.info(f"Conversation long ({len(messages)} messages) during tool loop, creating summary")
-                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model)
+                messages = self._summarize_conversation(messages, openrouter_api_key, openrouter_model, session=session)
 
             messages.insert(0, {
                 'role': 'system',

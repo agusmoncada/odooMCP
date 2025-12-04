@@ -57,6 +57,20 @@ class AIChatSession(models.Model):
         default=True
     )
 
+    # Persistent conversation summary - stores summarized older messages
+    # This prevents having to re-summarize on every request
+    conversation_summary = fields.Text(
+        string='Conversation Summary',
+        help='AI-generated summary of older messages to reduce token usage'
+    )
+
+    # Track how many messages were summarized
+    summarized_message_count = fields.Integer(
+        string='Summarized Message Count',
+        default=0,
+        help='Number of messages that have been summarized'
+    )
+
     @api.depends('chat_message_ids')
     def _compute_message_count(self):
         for session in self:

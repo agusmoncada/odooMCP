@@ -34,6 +34,130 @@ class MCPServer:
         self._prompts = {}
         self._initialize_tools()
 
+    def _check_user_permissions(self, model: str, operation: str, record_id: int = None) -> Dict:
+        """
+        Check if the current user has permission to perform an operation on a model.
+
+        Args:
+            model: The Odoo model name (e.g., 'res.partner')
+            operation: One of 'read', 'create', 'write', 'unlink'
+            record_id: Optional record ID for record-level access checks
+
+        Returns:
+            Dict with 'allowed' (bool), 'error' (str if not allowed), and 'details' (dict)
+        """
+        try:
+            # Get the model
+            try:
+                Model = self.env[model]
+            except KeyError:
+                return {
+                    'allowed': False,
+                    'error': f"Model '{model}' not found. The required module may not be installed.",
+                    'details': {'model': model, 'operation': operation}
+                }
+
+            user = self.env.user
+            _logger.info(f"[Permission Check] User '{user.name}' (ID: {user.id}) checking '{operation}' on '{model}'")
+
+            # Map operation to Odoo access right
+            operation_map = {
+                'read': 'read',
+                'create': 'create',
+                'write': 'write',
+                'update': 'write',
+                'unlink': 'unlink',
+                'delete': 'unlink'
+            }
+            odoo_operation = operation_map.get(operation, operation)
+
+            # Check model-level access rights using check_access_rights
+            # This checks ir.model.access rules
+            try:
+                Model.check_access_rights(odoo_operation, raise_exception=True)
+            except Exception as access_error:
+                error_msg = str(access_error)
+                _logger.warning(f"[Permission Check] Access denied for user '{user.name}' to {odoo_operation} on {model}: {error_msg}")
+
+                # Provide user-friendly error message
+                friendly_operation = {
+                    'read': 'view',
+                    'create': 'create',
+                    'write': 'modify',
+                    'unlink': 'delete'
+                }.get(odoo_operation, odoo_operation)
+
+                return {
+                    'allowed': False,
+                    'error': f"You don't have permission to {friendly_operation} records in {model}. Please contact your administrator if you need access.",
+                    'details': {
+                        'model': model,
+                        'operation': odoo_operation,
+                        'user': user.name,
+                        'user_id': user.id,
+                        'technical_error': error_msg
+                    }
+                }
+
+            # If a specific record ID is provided, also check record-level rules
+            if record_id:
+                try:
+                    record = Model.browse(record_id)
+                    if not record.exists():
+                        return {
+                            'allowed': False,
+                            'error': f"Record {model}({record_id}) not found.",
+                            'details': {'model': model, 'record_id': record_id}
+                        }
+
+                    # Check record-level access using check_access_rule
+                    # This checks ir.rule (record rules)
+                    record.check_access_rule(odoo_operation)
+
+                except Exception as rule_error:
+                    error_msg = str(rule_error)
+                    _logger.warning(f"[Permission Check] Record rule denied for user '{user.name}' on {model}({record_id}): {error_msg}")
+
+                    friendly_operation = {
+                        'read': 'view',
+                        'create': 'create',
+                        'write': 'modify',
+                        'unlink': 'delete'
+                    }.get(odoo_operation, odoo_operation)
+
+                    return {
+                        'allowed': False,
+                        'error': f"You don't have permission to {friendly_operation} this specific record. This may be due to record-level security rules.",
+                        'details': {
+                            'model': model,
+                            'record_id': record_id,
+                            'operation': odoo_operation,
+                            'user': user.name,
+                            'technical_error': error_msg
+                        }
+                    }
+
+            _logger.info(f"[Permission Check] Access granted for user '{user.name}' to {odoo_operation} on {model}")
+            return {
+                'allowed': True,
+                'error': None,
+                'details': {
+                    'model': model,
+                    'operation': odoo_operation,
+                    'user': user.name,
+                    'user_id': user.id,
+                    'record_id': record_id
+                }
+            }
+
+        except Exception as e:
+            _logger.exception(f"[Permission Check] Unexpected error checking permissions")
+            return {
+                'allowed': False,
+                'error': f"Error checking permissions: {str(e)}",
+                'details': {'model': model, 'operation': operation}
+            }
+
     def _sanitize_for_json(self, data):
         """Convert non-JSON-serializable types to JSON-safe formats"""
         from datetime import datetime, date, time
@@ -102,7 +226,7 @@ class MCPServer:
             },
             'create_record': {
                 'name': 'create_record',
-                'description': 'Create a new record in an Odoo model. IMPORTANT: values parameter must be a JSON object (dict), not a string. Supported template variables in values: {{uid}} (current user ID), {{today}}, {{tomorrow}}, {{next_week_monday}}, {{next_monday}}, {{now}}, {{activity_type_id_for_call}}. For other dynamic values like partner_id or res_id, extract them from context or ask the user.',
+                'description': 'Create a new record in an Odoo model. PERMISSION CHECK: User permissions are verified before creation - only models the user has access to can be used. IMPORTANT: values parameter must be a JSON object (dict), not a string. Supported template variables in values: {{uid}} (current user ID), {{today}}, {{tomorrow}}, {{next_week_monday}}, {{next_monday}}, {{now}}, {{activity_type_id_for_call}}. For other dynamic values like partner_id or res_id, extract them from context or ask the user.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -114,7 +238,7 @@ class MCPServer:
             },
             'write_record': {
                 'name': 'write_record',
-                'description': 'Update/modify/change existing records. Use when user asks to mark, update, change, or modify data. IMPORTANT: You MUST always provide the values parameter as a dict/object with the fields to update. Example: to mark sale order as sent, use values={"state": "sent"}. Common sale.order states: "draft", "sent", "sale", "done", "cancel".',
+                'description': 'Update/modify/change existing records. PERMISSION CHECK: User permissions are verified before modification - only records the user has access to modify can be updated. Use when user asks to mark, update, change, or modify data. IMPORTANT: You MUST always provide the values parameter as a dict/object with the fields to update. Example: to mark sale order as sent, use values={"state": "sent"}. Common sale.order states: "draft", "sent", "sale", "done", "cancel".',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -138,14 +262,14 @@ class MCPServer:
             },
             'generate_graph': {
                 'name': 'generate_graph',
-                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries. CRITICAL: Always use group_by parameter to create meaningful charts. EXAMPLES: "sales by customer" -> group_by="partner_id", "sales by product" -> group_by="product_id", "sales by status" -> group_by="state". Never use x_field for categorization.',
+                'description': 'Generate a visual chart/graph ONLY when user explicitly asks for: "chart", "graph", "plot", "visualize", "show me a chart". DO NOT use for: sums, counts, queries, status checks, or when user just wants numbers. Use search_records instead for data queries. CRITICAL: Always use group_by parameter to create meaningful charts. EXAMPLES: "sales by customer" -> group_by="partner_id", "sales by product" -> group_by="product_id", "sales by status" -> group_by="state". Charts show values/totals on bars and percentages with amounts on pie charts.',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
                         'graph_type': {
                             'type': 'string',
-                            'enum': ['line', 'bar', 'pie', 'area', 'scatter', 'doughnut'],
-                            'description': 'Type of graph to generate'
+                            'enum': ['bar', 'column', 'line', 'pie', 'donut', 'horizontal_bar', 'stacked_bar', 'stacked', 'piled'],
+                            'description': 'Type of graph: bar/column (vertical bars with values), horizontal_bar (horizontal bars), line (with filled area), pie (with % and amounts), donut (pie with center total), stacked_bar/stacked/piled (stacked columns for comparing multiple series)'
                         },
                         'model': {
                             'type': 'string',
@@ -331,7 +455,8 @@ class MCPServer:
             elif tool_name == 'generate_graph':
                 _logger.info(f"[MCP] generate_graph called with arguments: {arguments}")
                 result = self._generate_graph(**arguments)
-                _logger.info(f"[MCP] generate_graph result summary: success={result.get('success')}, has_image={bool(result.get('image_base64'))}, image_length={len(result.get('image_base64', ''))}")
+                image_base64 = result.get('image_base64') or ''
+                _logger.info(f"[MCP] generate_graph result summary: success={result.get('success')}, has_image={bool(image_base64)}, image_length={len(image_base64)}")
                 return result
             elif tool_name == 'create_vendor_bill_from_pdf':
                 return self._create_vendor_bill_from_pdf(**arguments)
@@ -554,9 +679,68 @@ class MCPServer:
 
         return resolve_value(values)
 
+    def _convert_one2many_fields(self, Model, values: Dict) -> Dict:
+        """Convert One2many field values to proper Odoo format.
+
+        AI models often pass One2many fields as simple lists of dicts:
+            {'invoice_line_ids': [{'product_id': 1, 'quantity': 3}]}
+
+        Odoo requires the special command format:
+            {'invoice_line_ids': [(0, 0, {'product_id': 1, 'quantity': 3})]}
+
+        Where (0, 0, vals) means "create new record with vals"
+        """
+        from odoo import fields as odoo_fields
+
+        converted_values = {}
+
+        for field_name, value in values.items():
+            if field_name not in Model._fields:
+                converted_values[field_name] = value
+                continue
+
+            field = Model._fields[field_name]
+
+            # Check if this is a One2many or Many2many field
+            if isinstance(field, (odoo_fields.One2many, odoo_fields.Many2many)):
+                if isinstance(value, list) and value:
+                    converted_list = []
+                    for item in value:
+                        if isinstance(item, dict):
+                            # Convert dict to (0, 0, dict) format for creation
+                            converted_list.append((0, 0, item))
+                        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                            # Already in command format (e.g., (0, 0, {...}) or (4, id, 0))
+                            converted_list.append(tuple(item))
+                        elif isinstance(item, int):
+                            # Just an ID - use (4, id, 0) to link existing record
+                            converted_list.append((4, item, 0))
+                        else:
+                            converted_list.append(item)
+
+                    converted_values[field_name] = converted_list
+                    _logger.info(f"[create_record] Converted One2many field '{field_name}': {len(converted_list)} items")
+                else:
+                    converted_values[field_name] = value
+            else:
+                converted_values[field_name] = value
+
+        return converted_values
+
     def _create_record(self, model: str, values, view_context: Optional[Dict] = None) -> Dict:
         """Create a new record"""
         try:
+            # Check user permissions FIRST before any processing
+            permission_check = self._check_user_permissions(model, 'create')
+            if not permission_check['allowed']:
+                _logger.warning(f"[create_record] Permission denied: {permission_check['error']}")
+                return {
+                    'success': False,
+                    'error': permission_check['error'],
+                    'permission_denied': True,
+                    'details': permission_check.get('details', {})
+                }
+
             # Handle case where values is passed as a JSON string instead of dict
             if isinstance(values, str):
                 _logger.info(f"values received as string, parsing JSON: {values[:100]}...")
@@ -594,6 +778,23 @@ class MCPServer:
 
             Model = self.env[model]
 
+            # Filter out invalid fields to prevent errors
+            # Get valid field names for this model
+            valid_fields = set(Model._fields.keys())
+            invalid_fields = []
+            filtered_values = {}
+
+            for key, value in values.items():
+                if key in valid_fields:
+                    filtered_values[key] = value
+                else:
+                    invalid_fields.append(key)
+
+            if invalid_fields:
+                _logger.warning(f"[create_record] Filtered out invalid fields for {model}: {invalid_fields}")
+
+            values = filtered_values
+
             # Special handling for mail.activity - need to convert res_model to res_model_id
             if model == 'mail.activity' and 'res_model' in values and 'res_model_id' not in values:
                 res_model_name = values.get('res_model')
@@ -606,13 +807,46 @@ class MCPServer:
                         'error': f"Model '{res_model_name}' not found in ir.model. Cannot create activity."
                     }
 
-            record = Model.create(values)
+            # Convert One2many fields to proper Odoo format
+            # AI might pass: {'invoice_line_ids': [{'product_id': 1, 'quantity': 3}]}
+            # Odoo requires: {'invoice_line_ids': [(0, 0, {'product_id': 1, 'quantity': 3})]}
+            values = self._convert_one2many_fields(Model, values)
 
-            return {
-                'success': True,
-                'record_id': record.id,
-                'record': self._sanitize_for_json(record.read()[0])
-            }
+            # Use savepoint to handle database errors gracefully
+            # This prevents UniqueViolation and other DB errors from aborting the whole transaction
+            import psycopg2
+            savepoint_name = f"create_record_{model.replace('.', '_')}_{id(values)}"
+
+            try:
+                self.env.cr.execute(f'SAVEPOINT {savepoint_name}')
+                record = Model.create(values)
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+
+                return {
+                    'success': True,
+                    'record_id': record.id,
+                    'record': self._sanitize_for_json(record.read()[0])
+                }
+            except psycopg2.errors.UniqueViolation as e:
+                # Rollback to savepoint to recover the transaction
+                self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+                _logger.warning(f"[create_record] Duplicate record in {model}: {e}")
+                # Extract the key name for a more helpful error message
+                error_msg = str(e)
+                if 'already exists' in error_msg:
+                    return {
+                        'success': False,
+                        'error': f"A record with these values already exists in {model}. Try searching for existing records first or use a different value."
+                    }
+                return {'success': False, 'error': f"Duplicate record: {str(e)}"}
+            except psycopg2.Error as e:
+                # Handle other database errors
+                self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+                _logger.exception(f"Database error creating record in model {model}")
+                return {'success': False, 'error': f"Database error: {str(e)}"}
+
         except KeyError as e:
             # Model doesn't exist - likely module not installed
             return {
@@ -625,19 +859,51 @@ class MCPServer:
 
     def _write_record(self, model: str, record_id: int, values: Dict) -> Dict:
         """Update an existing record"""
+        import psycopg2
         try:
+            # Check user permissions FIRST - both model-level and record-level
+            permission_check = self._check_user_permissions(model, 'write', record_id=record_id)
+            if not permission_check['allowed']:
+                _logger.warning(f"[write_record] Permission denied: {permission_check['error']}")
+                return {
+                    'success': False,
+                    'error': permission_check['error'],
+                    'permission_denied': True,
+                    'details': permission_check.get('details', {})
+                }
+
             Model = self.env[model]
             record = Model.browse(record_id)
 
             if not record.exists():
                 return {'success': False, 'error': 'Record not found'}
 
-            record.write(values)
+            # Use savepoint to handle database errors gracefully
+            savepoint_name = f"write_record_{model.replace('.', '_')}_{record_id}"
 
-            return {
-                'success': True,
-                'record': self._sanitize_for_json(record.read()[0])
-            }
+            try:
+                self.env.cr.execute(f'SAVEPOINT {savepoint_name}')
+                record.write(values)
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+
+                return {
+                    'success': True,
+                    'record': self._sanitize_for_json(record.read()[0])
+                }
+            except psycopg2.errors.UniqueViolation as e:
+                self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+                _logger.warning(f"[write_record] Duplicate value in {model}: {e}")
+                return {
+                    'success': False,
+                    'error': f"Cannot update: a record with these values already exists. Try a different value."
+                }
+            except psycopg2.Error as e:
+                self.env.cr.execute(f'ROLLBACK TO SAVEPOINT {savepoint_name}')
+                self.env.cr.execute(f'RELEASE SAVEPOINT {savepoint_name}')
+                _logger.exception(f"Database error updating record in model {model}")
+                return {'success': False, 'error': f"Database error: {str(e)}"}
+
         except KeyError as e:
             return {
                 'success': False,
@@ -890,8 +1156,19 @@ class MCPServer:
             }
         }
 
-    def _render_graph_image(self, graph_type: str, labels: List, values: List, title: str) -> str:
-        """Render graph as base64 encoded image"""
+    def _render_graph_image(self, graph_type: str, labels: List, values: List, title: str,
+                            stacked_data: Dict = None, show_values: bool = True) -> str:
+        """
+        Render graph as base64 encoded image with value labels and stacked chart support.
+
+        Args:
+            graph_type: Type of chart (bar, line, pie, stacked_bar, horizontal_bar)
+            labels: X-axis labels
+            values: Y-axis values (single series)
+            title: Chart title
+            stacked_data: Dict for stacked charts: {'series_names': [...], 'series_data': [[...], [...]]}
+            show_values: Whether to show value labels on charts
+        """
         try:
             import matplotlib
             matplotlib.use('Agg')  # Non-interactive backend
@@ -899,30 +1176,196 @@ class MCPServer:
             import base64
             from io import BytesIO
 
-            # Create figure
-            fig, ax = plt.subplots(figsize=(10, 6))
+            # Odoo-style colors palette
+            colors = ['#875A7B', '#00A09D', '#F06050', '#F4A460', '#6CC3D5',
+                      '#7C7BAD', '#E6C74C', '#97D077', '#B37D4E', '#5B899E']
 
-            if graph_type == 'bar':
-                ax.bar(range(len(labels)), values, color='#875A7B')
+            # Create figure with appropriate size
+            fig_width = max(10, len(labels) * 0.8) if labels else 10
+            fig, ax = plt.subplots(figsize=(min(fig_width, 16), 7))
+
+            def format_value(val):
+                """Format value for display (with thousands separator)"""
+                if val >= 1000000:
+                    return f'{val/1000000:,.1f}M'
+                elif val >= 1000:
+                    return f'{val/1000:,.1f}K'
+                elif isinstance(val, float):
+                    return f'{val:,.2f}'
+                else:
+                    return f'{val:,}'
+
+            if graph_type == 'bar' or graph_type == 'column':
+                bars = ax.bar(range(len(labels)), values, color=colors[0], edgecolor='white', linewidth=0.5)
                 ax.set_xticks(range(len(labels)))
-                ax.set_xticklabels(labels, rotation=45, ha='right')
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)
+
+                # Add value labels on top of bars
+                if show_values:
+                    for bar, val in zip(bars, values):
+                        height = bar.get_height()
+                        ax.annotate(format_value(val),
+                                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                                    xytext=(0, 3), textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+            elif graph_type == 'horizontal_bar' or graph_type == 'hbar':
+                bars = ax.barh(range(len(labels)), values, color=colors[0], edgecolor='white', linewidth=0.5)
+                ax.set_yticks(range(len(labels)))
+                ax.set_yticklabels(labels, fontsize=9)
+
+                # Add value labels at end of bars
+                if show_values:
+                    for bar, val in zip(bars, values):
+                        width = bar.get_width()
+                        ax.annotate(format_value(val),
+                                    xy=(width, bar.get_y() + bar.get_height() / 2),
+                                    xytext=(3, 0), textcoords="offset points",
+                                    ha='left', va='center', fontsize=8, fontweight='bold')
+
+            elif graph_type == 'stacked_bar' or graph_type == 'stacked' or graph_type == 'piled':
+                # Stacked/piled column chart
+                if stacked_data and 'series_data' in stacked_data:
+                    series_names = stacked_data.get('series_names', [f'Series {i+1}' for i in range(len(stacked_data['series_data']))])
+                    series_data = stacked_data['series_data']
+                    x = range(len(labels))
+                    bottom = [0] * len(labels)
+
+                    for idx, (series_vals, name) in enumerate(zip(series_data, series_names)):
+                        color = colors[idx % len(colors)]
+                        bars = ax.bar(x, series_vals, bottom=bottom, label=name,
+                                      color=color, edgecolor='white', linewidth=0.5)
+
+                        # Add value labels inside bars (if significant)
+                        if show_values:
+                            for bar, val in zip(bars, series_vals):
+                                if val > 0:
+                                    height = bar.get_height()
+                                    if height > max(values) * 0.05:  # Only show if bar is big enough
+                                        ax.annotate(format_value(val),
+                                                    xy=(bar.get_x() + bar.get_width() / 2,
+                                                        bar.get_y() + height / 2),
+                                                    ha='center', va='center', fontsize=7,
+                                                    color='white', fontweight='bold')
+
+                        # Update bottom for next series
+                        bottom = [b + v for b, v in zip(bottom, series_vals)]
+
+                    # Add total labels on top
+                    if show_values:
+                        for i, total in enumerate(bottom):
+                            ax.annotate(format_value(total),
+                                        xy=(i, total), xytext=(0, 3),
+                                        textcoords="offset points",
+                                        ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+                    ax.legend(loc='upper right', fontsize=8)
+                else:
+                    # Fallback to regular bar if no stacked data
+                    bars = ax.bar(range(len(labels)), values, color=colors[0])
+
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)
+
             elif graph_type == 'line':
-                ax.plot(range(len(labels)), values, marker='o', color='#875A7B', linewidth=2)
+                line, = ax.plot(range(len(labels)), values, marker='o', color=colors[0],
+                                linewidth=2, markersize=6, markerfacecolor='white', markeredgewidth=2)
                 ax.set_xticks(range(len(labels)))
-                ax.set_xticklabels(labels, rotation=45, ha='right')
-            elif graph_type == 'pie':
-                ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
-            else:  # default to bar
-                ax.bar(range(len(labels)), values, color='#875A7B')
-                ax.set_xticks(range(len(labels)))
-                ax.set_xticklabels(labels, rotation=45, ha='right')
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)
 
-            ax.set_title(title, fontsize=14, fontweight='bold')
+                # Add value labels above points
+                if show_values:
+                    for i, val in enumerate(values):
+                        ax.annotate(format_value(val),
+                                    xy=(i, val), xytext=(0, 8),
+                                    textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+                # Fill area under line
+                ax.fill_between(range(len(labels)), values, alpha=0.3, color=colors[0])
+
+            elif graph_type == 'pie':
+                # Calculate total for center annotation
+                total = sum(values)
+
+                # Create pie with percentages and values
+                def make_autopct(values):
+                    def my_autopct(pct):
+                        val = int(round(pct * total / 100.0))
+                        return f'{pct:.1f}%\n({format_value(val)})'
+                    return my_autopct
+
+                wedges, texts, autotexts = ax.pie(
+                    values, labels=labels, autopct=make_autopct(values),
+                    startangle=90, colors=colors[:len(values)],
+                    explode=[0.02] * len(values),  # Slight separation
+                    shadow=False, textprops={'fontsize': 8}
+                )
+
+                # Style the percentage text
+                for autotext in autotexts:
+                    autotext.set_fontsize(7)
+                    autotext.set_fontweight('bold')
+
+                # Add total in the center (for donut effect, uncomment circle)
+                # centre_circle = plt.Circle((0, 0), 0.50, fc='white')
+                # ax.add_patch(centre_circle)
+                ax.annotate(f'Total: {format_value(total)}',
+                            xy=(0, -1.3), ha='center', fontsize=10, fontweight='bold')
+
+            elif graph_type == 'donut':
+                total = sum(values)
+
+                def make_autopct(values):
+                    def my_autopct(pct):
+                        val = int(round(pct * total / 100.0))
+                        return f'{pct:.1f}%'
+                    return my_autopct
+
+                wedges, texts, autotexts = ax.pie(
+                    values, labels=labels, autopct=make_autopct(values),
+                    startangle=90, colors=colors[:len(values)],
+                    pctdistance=0.75, textprops={'fontsize': 8}
+                )
+
+                # Create donut effect
+                centre_circle = plt.Circle((0, 0), 0.55, fc='white')
+                ax.add_patch(centre_circle)
+
+                # Add total in center
+                ax.annotate(f'Total\n{format_value(total)}',
+                            xy=(0, 0), ha='center', va='center',
+                            fontsize=12, fontweight='bold')
+
+            else:  # default to bar
+                bars = ax.bar(range(len(labels)), values, color=colors[0], edgecolor='white')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)
+
+                if show_values:
+                    for bar, val in zip(bars, values):
+                        height = bar.get_height()
+                        ax.annotate(format_value(val),
+                                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                                    xytext=(0, 3), textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+            # Style the chart
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            # Add gridlines for non-pie charts
+            if graph_type not in ['pie', 'donut']:
+                ax.yaxis.grid(True, linestyle='--', alpha=0.7)
+                ax.set_axisbelow(True)
+
             plt.tight_layout()
 
             # Convert to base64
             buffer = BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+            plt.savefig(buffer, format='png', dpi=120, bbox_inches='tight',
+                        facecolor='white', edgecolor='none')
             buffer.seek(0)
             image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
             plt.close(fig)
@@ -961,7 +1404,7 @@ class MCPServer:
             aggregation='sum',
             title='Sales by State'
         )
-        _logger.info(f"[DEBUG] Test 1 (by state): success={test1.get('success')}, image_size={len(test1.get('image_base64', ''))}")
+        _logger.info(f"[DEBUG] Test 1 (by state): success={test1.get('success')}, image_size={len(test1.get('image_base64') or '')}")
         
         # Test 2: Sale orders by customer
         test2 = self._generate_graph(
@@ -973,15 +1416,26 @@ class MCPServer:
             limit=10,
             title='Top 10 Customers'
         )
-        _logger.info(f"[DEBUG] Test 2 (by customer): success={test2.get('success')}, image_size={len(test2.get('image_base64', ''))}")
+        _logger.info(f"[DEBUG] Test 2 (by customer): success={test2.get('success')}, image_size={len(test2.get('image_base64') or '')}")
         
-        return {"test1_size": len(test1.get('image_base64', '')), "test2_size": len(test2.get('image_base64', ''))}
+        return {"test1_size": len(test1.get('image_base64') or ''), "test2_size": len(test2.get('image_base64') or '')}
 
     def _process_pdf_invoice(self, attachment_id: int, filename: str = None) -> Dict:
         """Process PDF invoice from attachment and create vendor bill"""
         try:
+            # Check user permissions for creating vendor bills (account.move)
+            permission_check = self._check_user_permissions('account.move', 'create')
+            if not permission_check['allowed']:
+                _logger.warning(f"[process_pdf_invoice] Permission denied: {permission_check['error']}")
+                return {
+                    'success': False,
+                    'error': permission_check['error'],
+                    'permission_denied': True,
+                    'details': permission_check.get('details', {})
+                }
+
             from .pdf_processor import PDFInvoiceProcessor
-            
+
             # Get attachment
             Attachment = self.env['ir.attachment']
             attachment = Attachment.browse(attachment_id)
@@ -1036,18 +1490,29 @@ class MCPServer:
                 filename=filename
             )
             
-            if bill_result['success']:
-                return {
-                    'success': True,
-                    'invoice_id': bill_result['invoice_id'],
-                    'invoice_name': bill_result['invoice_name'],
-                    'vendor_name': bill_result['vendor_name'],
-                    'total': bill_result['total'],
-                    'currency': bill_result['currency'],
-                    'message': f"✅ Successfully processed PDF invoice and created vendor bill {bill_result['invoice_name']} for {bill_result['vendor_name']}. Review activity has been scheduled.",
+            if bill_result.get('success') or bill_result.get('partial_success'):
+                # Return the full result including partial success info
+                response = {
+                    'success': bill_result.get('success', False),
+                    'partial_success': bill_result.get('partial_success', False),
+                    'invoice_id': bill_result.get('invoice_id'),
+                    'invoice_name': bill_result.get('invoice_name'),
+                    'vendor_name': bill_result.get('vendor_name'),
+                    'total': bill_result.get('total', 0),
+                    'currency': bill_result.get('currency'),
+                    'lines_processed': bill_result.get('lines_processed', 0),
+                    'lines_needing_review': bill_result.get('lines_needing_review', 0),
+                    'match_summary': bill_result.get('match_summary', {}),
+                    'message': bill_result.get('message', ''),
                     'ocr_method': result.get('ocr_method', 'text-based'),
-                    'extracted_text_length': len(result.get('raw_text', ''))
+                    'extracted_text_length': len(result.get('raw_text') or '')
                 }
+
+                # Add warnings if any
+                if bill_result.get('warnings'):
+                    response['warnings'] = bill_result['warnings']
+
+                return response
             else:
                 return bill_result
                 
@@ -1055,8 +1520,8 @@ class MCPServer:
             _logger.exception("Error processing PDF invoice")
             return {'success': False, 'error': str(e)}
 
-    def _create_activity(self, res_model: str = None, res_id: int = None, summary: str = None, 
-                        note: str = None, activity_type: str = 'todo', due_days: int = 1, 
+    def _create_activity(self, res_model: str = None, res_id: int = None, summary: str = None,
+                        note: str = None, activity_type: str = 'todo', due_days: int = 1,
                         view_context: Optional[Dict] = None) -> Dict:
         """Create an activity/reminder for a record"""
         _logger.info(f"[Create Activity] Called with: res_model={res_model}, res_id={res_id}, summary={summary}")
@@ -1064,6 +1529,16 @@ class MCPServer:
         if view_context:
             _logger.info(f"[Create Activity] View context contents: {view_context}")
         try:
+            # Check user permissions for creating activities (mail.activity)
+            permission_check = self._check_user_permissions('mail.activity', 'create')
+            if not permission_check['allowed']:
+                _logger.warning(f"[create_activity] Permission denied: {permission_check['error']}")
+                return {
+                    'success': False,
+                    'error': permission_check['error'],
+                    'permission_denied': True,
+                    'details': permission_check.get('details', {})
+                }
             # If view context is available and parameters are missing, use context to fill them
             if view_context and (not res_model or not res_id):
                 if not res_model:
@@ -1141,12 +1616,21 @@ class MCPServer:
             
             # Create the activity
             Activity = self.env['mail.activity']
-            
+
+            # Get res_model_id (required by mail.activity)
+            IrModel = self.env['ir.model']
+            model_record = IrModel.search([('model', '=', res_model)], limit=1)
+            if not model_record:
+                return {
+                    'success': False,
+                    'error': f'Model {res_model} not found in ir.model'
+                }
+
             activity_vals = {
                 'activity_type_id': activity_type_record.id,
                 'summary': summary,
                 'res_id': res_id,
-                'res_model': res_model,
+                'res_model_id': model_record.id,  # Use res_model_id instead of res_model
                 'user_id': self.env.user.id,
                 'date_deadline': due_date,
             }

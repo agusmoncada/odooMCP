@@ -106,16 +106,22 @@ const discussContextUpdaterService = {
                 
                 let result;
                 try {
+                    // In Odoo 16, the rpc service expects params to be passed directly
+                    // The 'context' key conflicts with Odoo's built-in context
+                    // Use 'view_context' instead to avoid conflicts
                     const rpcParams = {
-                        context: contextForBackend,
+                        view_context: contextForBackend,
                     };
-                    
+
                     console.log("[AI Chat] Calling RPC with params:", JSON.stringify(rpcParams, null, 2));
-                    
+                    console.log("[AI Chat] contextForBackend type:", typeof contextForBackend);
+                    console.log("[AI Chat] contextForBackend.model:", contextForBackend?.model);
+                    console.log("[AI Chat] contextForBackend.active_id:", contextForBackend?.active_id);
+
                     result = await rpc("/ai_chat/update_channel_context", rpcParams);
-                    
+
                     console.log("[AI Chat] RPC call successful, result:", result);
-                    
+
                     if (result.success) {
                         console.log("[AI Chat] AI channel context updated successfully");
                     } else {
@@ -123,6 +129,7 @@ const discussContextUpdaterService = {
                     }
                 } catch (error) {
                     console.error("[AI Chat] RPC call failed:", error);
+                    console.error("[AI Chat] RPC error details:", error.message, error.stack);
                     // Log but don't throw to avoid breaking other functionality
                 }
             } catch (error) {

@@ -1,12 +1,15 @@
-"""PDF Invoice Processing"""
+"""PDF Invoice Processing with Multi-Tier Matching"""
 
 import logging
 import base64
 import json
 import io
-from typing import Dict, Optional
+import re
+import uuid
+from typing import Dict, Optional, List, Tuple, Any
+from datetime import date, timedelta
 
-from odoo import exceptions
+from odoo import exceptions, fields
 
 _logger = logging.getLogger(__name__)
 
@@ -28,6 +31,450 @@ try:
 except ImportError as e:
     OCR_AVAILABLE = False
     _logger.warning(f"OCR not available: {e}. To enable OCR for scanned PDFs, install: pip install pytesseract pdf2image pillow")
+
+
+class PartnerNotFoundError(Exception):
+    """Raised when a partner cannot be matched with required criteria"""
+    pass
+
+
+class PartnerMatcher:
+    """Enhanced partner matching with VAT normalization and strict rules"""
+
+    def __init__(self, env):
+        self.env = env
+
+    @staticmethod
+    def normalize_vat(vat: str) -> str:
+        """
+        Normalize VAT number for comparison
+        - Remove spaces, dashes, dots
+        - Handle country prefix variations (AR-12345678 vs AR12345678)
+        - Uppercase
+        """
+        if not vat:
+            return ""
+        # Remove common separators
+        normalized = re.sub(r'[\s\-\.\,]', '', vat)
+        # Uppercase
+        normalized = normalized.upper()
+        return normalized
+
+    def find_partner(self, extracted_name: str, extracted_vat: str = None,
+                     create_if_missing: bool = True, invoice_data: Dict = None) -> Tuple[Any, str, bool]:
+        """
+        Find partner with matching, create if not found
+
+        Args:
+            extracted_name: Vendor name from invoice
+            extracted_vat: VAT number from invoice
+            create_if_missing: If True, create vendor when not found
+            invoice_data: Full invoice data for additional vendor info
+
+        Returns:
+            Tuple of (partner_record, match_type, was_created)
+            - match_type: 'vat_match', 'name_exact', 'name_fuzzy', 'created'
+            - was_created: True if vendor was auto-created (needs review)
+        """
+        Partner = self.env['res.partner']
+        invoice_data = invoice_data or {}
+
+        # 1. VAT exact match (most reliable)
+        if extracted_vat:
+            normalized_vat = self.normalize_vat(extracted_vat)
+            _logger.info(f"[PartnerMatcher] Searching by VAT: {normalized_vat}")
+
+            # Search with normalized VAT
+            partners = Partner.search([('supplier_rank', '>', 0)])
+            for partner in partners:
+                if partner.vat and self.normalize_vat(partner.vat) == normalized_vat:
+                    _logger.info(f"[PartnerMatcher] Found by VAT: {partner.name}")
+                    return partner, 'vat_match', False
+
+        # 2. Name exact match (case-insensitive)
+        if extracted_name:
+            _logger.info(f"[PartnerMatcher] Searching by name: {extracted_name}")
+
+            # Exact name match
+            partner = Partner.search([
+                ('name', '=ilike', extracted_name.strip()),
+                ('supplier_rank', '>', 0)
+            ], limit=1)
+
+            if partner:
+                _logger.info(f"[PartnerMatcher] Found by exact name: {partner.name}")
+                return partner, 'name_exact', False
+
+            # Try partial/fuzzy name match
+            partner = Partner.search([
+                ('name', 'ilike', extracted_name.strip()),
+                ('supplier_rank', '>', 0)
+            ], limit=1)
+
+            if partner:
+                _logger.info(f"[PartnerMatcher] Found by fuzzy name: {partner.name}")
+                return partner, 'name_fuzzy', False
+
+        # 3. No match found - create new vendor if allowed
+        if create_if_missing:
+            return self._create_vendor(extracted_name, extracted_vat, invoice_data)
+
+        # 4. No match and creation not allowed
+        raise PartnerNotFoundError(
+            f"No partner found matching name '{extracted_name}' or VAT '{extracted_vat}'. "
+            "Please create the partner first."
+        )
+
+    def _create_vendor(self, name: str, vat: str = None, invoice_data: Dict = None) -> Tuple[Any, str, bool]:
+        """
+        Create a new vendor from invoice data
+
+        Returns:
+            Tuple of (partner_record, 'created', True)
+        """
+        Partner = self.env['res.partner']
+        invoice_data = invoice_data or {}
+
+        vendor_vals = {
+            'name': name or 'Unknown Vendor',
+            'supplier_rank': 1,
+            'customer_rank': 0,
+            'is_company': True,
+            'company_type': 'company',
+        }
+
+        if vat:
+            vendor_vals['vat'] = vat
+
+        # Add additional info from invoice if available
+        if invoice_data.get('vendor_address'):
+            vendor_vals['street'] = invoice_data['vendor_address']
+
+        if invoice_data.get('vendor_phone'):
+            vendor_vals['phone'] = invoice_data['vendor_phone']
+
+        if invoice_data.get('vendor_email'):
+            vendor_vals['email'] = invoice_data['vendor_email']
+
+        # Add note that this was auto-created
+        vendor_vals['comment'] = (
+            "⚠️ AUTO-CREATED FROM PDF INVOICE\n"
+            "This vendor was automatically created during PDF invoice processing.\n"
+            "Please review and complete the vendor information."
+        )
+
+        try:
+            vendor = Partner.create(vendor_vals)
+            _logger.info(f"[PartnerMatcher] Created new vendor: {vendor.name} (ID: {vendor.id}, VAT: {vat})")
+            return vendor, 'created', True
+        except Exception as e:
+            _logger.error(f"[PartnerMatcher] Failed to create vendor: {e}")
+            raise PartnerNotFoundError(f"Failed to create vendor '{name}': {str(e)}")
+
+
+class ProductMatcher:
+    """Multi-tier product matching with confidence tracking"""
+
+    def __init__(self, env):
+        self.env = env
+
+    def match_product(self, line_description: str, vendor_id: int = None,
+                      line_data: Dict = None) -> Dict:
+        """
+        Multi-tier product matching with confidence tracking
+
+        Returns dict with:
+            - product: product.product record or None
+            - match_type: exact|supplier_mapping|fuzzy_auto|fuzzy_review|ai_semantic|placeholder
+            - confidence: 0.0-1.0
+            - needs_review: bool
+            - message: str or None
+        """
+        result = {
+            'product': None,
+            'match_type': None,
+            'confidence': 0,
+            'needs_review': False,
+            'message': None
+        }
+
+        line_data = line_data or {}
+        Product = self.env['product.product']
+
+        # Tier 1: Exact match (SKU, barcode, exact name)
+        product = self._exact_match(line_description)
+        if product:
+            result.update(product=product, match_type='exact', confidence=1.0)
+            _logger.info(f"[ProductMatcher] Tier 1 exact match: {product.name}")
+            return result
+
+        # Tier 2: Supplier product mapping (product.supplierinfo)
+        if vendor_id:
+            product = self._match_by_supplier_info(vendor_id, line_description)
+            if product:
+                result.update(product=product, match_type='supplier_mapping', confidence=0.95)
+                _logger.info(f"[ProductMatcher] Tier 2 supplier mapping: {product.name}")
+                return result
+
+        # Tier 3: Fuzzy matching
+        product, score = self._fuzzy_match(line_description, vendor_id)
+        if product and score > 0.85:
+            result.update(product=product, match_type='fuzzy_auto', confidence=score)
+            _logger.info(f"[ProductMatcher] Tier 3 fuzzy auto ({score:.0%}): {product.name}")
+            return result
+        elif product and score > 0.6:
+            result.update(
+                product=product,
+                match_type='fuzzy_review',
+                confidence=score,
+                needs_review=True,
+                message=f"Fuzzy match ({score:.0%}): '{line_description}' → '{product.name}'"
+            )
+            _logger.info(f"[ProductMatcher] Tier 3 fuzzy review ({score:.0%}): {product.name}")
+            return result
+
+        # Tier 4: AI semantic matching (if enabled)
+        ai_result = self._ai_semantic_match(line_description, vendor_id)
+        if ai_result and ai_result.get('product'):
+            confidence = ai_result.get('confidence', 0)
+            result.update(
+                product=ai_result['product'],
+                match_type='ai_semantic',
+                confidence=confidence,
+                needs_review=confidence < 0.85,
+                message=ai_result.get('reasoning')
+            )
+            _logger.info(f"[ProductMatcher] Tier 4 AI match ({confidence:.0%}): {ai_result['product'].name}")
+            return result
+
+        # Tier 5: Create placeholder product
+        product = self._create_placeholder_product(line_description, vendor_id, line_data)
+        result.update(
+            product=product,
+            match_type='placeholder',
+            confidence=0,
+            needs_review=True,
+            message=f"No match found. Created placeholder product for '{line_description}'"
+        )
+        _logger.info(f"[ProductMatcher] Tier 5 placeholder created: {product.name}")
+        return result
+
+    def _exact_match(self, line_description: str):
+        """Tier 1: Exact matches on SKU, barcode, name"""
+        Product = self.env['product.product']
+
+        # Extract potential SKU/barcode from description
+        sku_match = re.search(r'\b([A-Z]{2,}[-]?\d{3,}|\d{8,13})\b', line_description.upper())
+
+        if sku_match:
+            code = sku_match.group(1)
+            # Try default_code (SKU)
+            product = Product.search([('default_code', '=', code)], limit=1)
+            if product:
+                return product
+            # Try barcode
+            product = Product.search([('barcode', '=', code)], limit=1)
+            if product:
+                return product
+
+        # Exact name match
+        product = Product.search([('name', '=ilike', line_description.strip())], limit=1)
+        if product:
+            return product
+
+        return None
+
+    def _match_by_supplier_info(self, vendor_id: int, product_name: str):
+        """Tier 2: Match using product.supplierinfo (vendor product mapping)"""
+        SupplierInfo = self.env['product.supplierinfo']
+
+        # Search by vendor's product name
+        supplierinfo = SupplierInfo.search([
+            ('partner_id', '=', vendor_id),
+            ('product_name', '=ilike', product_name.strip())
+        ], limit=1)
+
+        if supplierinfo and supplierinfo.product_tmpl_id:
+            # Get the product variant
+            product = supplierinfo.product_tmpl_id.product_variant_id
+            if product:
+                return product
+
+        # Try partial match on supplier's product name
+        supplierinfo = SupplierInfo.search([
+            ('partner_id', '=', vendor_id),
+            ('product_name', 'ilike', product_name.strip()[:30])
+        ], limit=1)
+
+        if supplierinfo and supplierinfo.product_tmpl_id:
+            return supplierinfo.product_tmpl_id.product_variant_id
+
+        return None
+
+    def _fuzzy_match(self, line_description: str, vendor_id: int = None) -> Tuple[Any, float]:
+        """Tier 3: Fuzzy/similarity matching"""
+        Product = self.env['product.product']
+
+        # Get candidate products
+        domain = [('purchase_ok', '=', True)]
+        candidates = Product.search(domain, limit=100)
+
+        if not candidates:
+            return None, 0
+
+        best_match = None
+        best_score = 0
+
+        desc_lower = line_description.lower().strip()
+        desc_words = set(desc_lower.split())
+
+        for product in candidates:
+            # Calculate similarity score
+            product_name_lower = (product.name or '').lower()
+            product_words = set(product_name_lower.split())
+
+            # Word overlap score
+            if desc_words and product_words:
+                overlap = len(desc_words & product_words)
+                total = len(desc_words | product_words)
+                word_score = overlap / total if total > 0 else 0
+            else:
+                word_score = 0
+
+            # Substring containment bonus
+            containment_score = 0
+            if desc_lower in product_name_lower or product_name_lower in desc_lower:
+                containment_score = 0.3
+
+            # Check supplier aliases
+            alias_score = 0
+            for seller in product.seller_ids:
+                if seller.product_name:
+                    seller_name_lower = seller.product_name.lower()
+                    if desc_lower in seller_name_lower or seller_name_lower in desc_lower:
+                        alias_score = 0.4
+                        break
+
+            score = min(1.0, word_score + containment_score + alias_score)
+
+            if score > best_score:
+                best_score = score
+                best_match = product
+
+        return best_match, best_score
+
+    def _ai_semantic_match(self, line_description: str, vendor_id: int = None) -> Optional[Dict]:
+        """Tier 4: AI-assisted semantic matching"""
+        try:
+            Product = self.env['product.product']
+
+            # Get candidates
+            candidates = Product.search([('purchase_ok', '=', True)], limit=20)
+            if not candidates:
+                return None
+
+            # Format candidates for AI
+            candidate_list = "\n".join([
+                f"ID:{p.id} | {p.name} | Code:{p.default_code or 'N/A'}"
+                for p in candidates
+            ])
+
+            # Get AI config
+            config = self.env['res.config.settings'].get_ai_config()
+            if not config.get('api_key'):
+                return None
+
+            from .ai_provider import OpenRouterProvider
+            ai_provider = OpenRouterProvider(
+                api_key=config['api_key'],
+                model=config['model'],
+                site_url=config['site_url'],
+                site_name=config['site_name']
+            )
+
+            prompt = f"""Match this supplier product description to the most likely internal product.
+
+Supplier description: "{line_description}"
+
+Internal products:
+{candidate_list}
+
+Consider:
+- Same product, different brand names
+- Abbreviated vs full names
+- Size/unit variations
+- Industry-specific terminology
+
+Return ONLY a JSON object (no markdown):
+{{"product_id": <ID or null>, "confidence": <0.0-1.0>, "reasoning": "<brief explanation>"}}
+
+If no confident match (confidence < 0.5), return {{"product_id": null, "confidence": 0, "reasoning": "..."}}"""
+
+            messages = [
+                {'role': 'system', 'content': 'You are an expert at matching product descriptions. Return only valid JSON.'},
+                {'role': 'user', 'content': prompt}
+            ]
+
+            response = ai_provider.chat(messages=messages, temperature=0.1, max_tokens=200)
+            ai_text = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+            # Parse JSON response
+            try:
+                # Extract JSON from response
+                json_match = re.search(r'\{[^}]+\}', ai_text)
+                if json_match:
+                    ai_result = json.loads(json_match.group())
+
+                    if ai_result.get('product_id') and ai_result.get('confidence', 0) >= 0.5:
+                        product = Product.browse(ai_result['product_id'])
+                        if product.exists():
+                            return {
+                                'product': product,
+                                'confidence': ai_result['confidence'],
+                                'reasoning': ai_result.get('reasoning', '')
+                            }
+            except (json.JSONDecodeError, ValueError) as e:
+                _logger.warning(f"[ProductMatcher] AI response parse error: {e}")
+
+            return None
+
+        except Exception as e:
+            _logger.warning(f"[ProductMatcher] AI semantic match failed: {e}")
+            return None
+
+    def _create_placeholder_product(self, line_description: str, vendor_id: int = None,
+                                     line_data: Dict = None) -> Any:
+        """Tier 5: Create placeholder product for manual review"""
+        Product = self.env['product.product']
+        SupplierInfo = self.env['product.supplierinfo']
+
+        line_data = line_data or {}
+
+        # Generate unique code
+        unique_id = uuid.uuid4().hex[:8].upper()
+        default_code = f"PENDING-{unique_id}"
+
+        product_vals = {
+            'name': f"[TO MATCH] {line_description[:100]}",
+            'type': 'consu',  # Consumable as safe default
+            'purchase_ok': True,
+            'sale_ok': False,  # Don't sell until reviewed
+            'default_code': default_code,
+            'description_purchase': f"Original description: {line_description}\n\nNeeds manual product matching.",
+        }
+
+        product = Product.create(product_vals)
+
+        # Create supplier pricelist entry for future matching
+        if vendor_id:
+            SupplierInfo.create({
+                'partner_id': vendor_id,
+                'product_tmpl_id': product.product_tmpl_id.id,
+                'product_name': line_description[:128],
+                'price': line_data.get('unit_price', 0),
+            })
+
+        return product
 
 
 class PDFInvoiceProcessor:
@@ -427,10 +874,53 @@ Invoice text:
             _logger.error(f"Failed to parse JSON: {json_text}")
             raise ValueError(f"Invalid JSON in response: {str(e)}")
 
+    def _check_duplicate_invoice(self, invoice_number: str, vendor_vat: str = None, vendor_name: str = None):
+        """
+        Check if an invoice with the same reference already exists.
+
+        Args:
+            invoice_number: Invoice reference number from PDF
+            vendor_vat: Vendor VAT for additional matching
+            vendor_name: Vendor name for additional matching
+
+        Returns:
+            Existing account.move record if found, None otherwise
+        """
+        Invoice = self.env['account.move']
+
+        # Search for existing vendor bills with same reference
+        domain = [
+            ('move_type', '=', 'in_invoice'),
+            ('ref', '=', invoice_number),
+        ]
+
+        existing = Invoice.search(domain, limit=1)
+
+        if existing:
+            _logger.info(f"[PDFProcessor] Found existing invoice with ref '{invoice_number}': {existing.name}")
+            return existing
+
+        # Also check if reference is in the name field
+        domain_name = [
+            ('move_type', '=', 'in_invoice'),
+            ('name', 'ilike', invoice_number),
+        ]
+
+        existing = Invoice.search(domain_name, limit=1)
+
+        if existing:
+            _logger.info(f"[PDFProcessor] Found existing invoice with name containing '{invoice_number}': {existing.name}")
+            return existing
+
+        return None
+
     def create_vendor_bill(self, invoice_data: Dict, pdf_content_b64: str = None,
                           filename: str = None) -> Dict:
         """
-        Create vendor bill from parsed PDF data
+        Create vendor bill from parsed PDF data with partial success handling.
+
+        Core principle: Always create as much as possible, never fail completely.
+        Document State: Always create in draft state (never confirm automatically).
 
         Args:
             invoice_data: Parsed invoice data dict
@@ -438,16 +928,91 @@ Invoice text:
             filename: Original filename
 
         Returns:
-            Dict with invoice creation result
+            Dict with invoice creation result including partial success info
         """
+        result = {
+            'success': False,
+            'partial_success': False,
+            'invoice_id': None,
+            'invoice_name': None,
+            'vendor_name': None,
+            'vendor_matched': False,
+            'vendor_match_type': None,
+            'vendor_created': False,  # True if vendor was auto-created
+            'total': 0,
+            'currency': None,
+            'lines_processed': 0,
+            'lines_needing_review': 0,
+            'products_needing_review': [],
+            'match_summary': {},
+            'warnings': [],
+            'errors': [],
+            'message': '',
+        }
+
         try:
-            # Find or create vendor
-            vendor = self._find_or_create_vendor(invoice_data)
+            # Step 0: Check for duplicate invoice
+            invoice_number = invoice_data.get('invoice_number', '').strip()
+            vendor_vat = invoice_data.get('vendor_vat', '').strip() if invoice_data.get('vendor_vat') else None
+            vendor_name = invoice_data.get('vendor_name', '').strip()
 
-            # Create invoice lines
-            invoice_lines = self._create_invoice_lines(invoice_data)
+            if invoice_number:
+                # Check if invoice with same reference already exists
+                existing = self._check_duplicate_invoice(invoice_number, vendor_vat, vendor_name)
+                if existing:
+                    result['success'] = False
+                    result['errors'].append(f"Duplicate invoice: {invoice_number} already exists as {existing.name}")
+                    result['message'] = (
+                        f"⚠️ **Invoice already exists**\n\n"
+                        f"An invoice with reference '{invoice_number}' already exists:\n"
+                        f"- **Existing Invoice:** {existing.name}\n"
+                        f"- **Vendor:** {existing.partner_id.name}\n"
+                        f"- **Amount:** {existing.currency_id.symbol}{existing.amount_total:,.2f}\n\n"
+                        f"No duplicate was created."
+                    )
+                    _logger.info(f"[PDFProcessor] Duplicate invoice detected: {invoice_number} -> {existing.name}")
+                    return result
 
-            # Create invoice
+            # Step 1: Find or create vendor
+            vendor = None
+            vendor_was_created = False
+            try:
+                vendor, vendor_match_type, vendor_was_created = self._find_or_create_vendor(
+                    invoice_data, create_if_missing=True
+                )
+                result['vendor_matched'] = True
+                result['vendor_name'] = vendor.name
+                result['vendor_match_type'] = vendor_match_type
+
+                if vendor_was_created:
+                    result['vendor_created'] = True
+                    result['warnings'].append(f"New vendor '{vendor.name}' was auto-created and needs review")
+                    _logger.info(f"[PDFProcessor] Auto-created vendor: {vendor.name}")
+
+            except PartnerNotFoundError as e:
+                # Partner not found and creation failed
+                result['errors'].append(str(e))
+                result['message'] = f"❌ Cannot create invoice: {str(e)}"
+                _logger.warning(f"[PDFProcessor] Partner not found, cannot proceed: {e}")
+                return result
+
+            # Step 2: Create invoice lines with multi-tier product matching
+            lines_result = self._create_invoice_lines(invoice_data, vendor_id=vendor.id)
+            invoice_lines = lines_result['lines']
+            products_needing_review = lines_result['products_needing_review']
+            match_summary = lines_result['match_summary']
+
+            result['match_summary'] = match_summary
+            result['lines_processed'] = match_summary['total_lines']
+            result['lines_needing_review'] = len(products_needing_review)
+            result['products_needing_review'] = products_needing_review
+
+            if not invoice_lines:
+                result['errors'].append("No valid line items could be extracted from the invoice")
+                result['message'] = "❌ Cannot create invoice: No valid line items found"
+                return result
+
+            # Step 3: Create invoice (always in draft state)
             Invoice = self.env['account.move']
 
             invoice_vals = {
@@ -458,6 +1023,7 @@ Invoice text:
                 'ref': invoice_data.get('invoice_number'),
                 'invoice_line_ids': invoice_lines,
                 'narration': invoice_data.get('notes'),
+                # Note: state='draft' is the default, no need to explicitly set
             }
 
             # Set currency if provided
@@ -469,127 +1035,316 @@ Invoice text:
 
             invoice = Invoice.create(invoice_vals)
 
-            # Attach PDF if provided
+            result['invoice_id'] = invoice.id
+            result['invoice_name'] = invoice.name
+            result['total'] = invoice.amount_total
+            result['currency'] = invoice.currency_id.name
+
+            # Step 4: Attach PDF if provided
             if pdf_content_b64 and filename:
                 self._attach_pdf_to_invoice(invoice, pdf_content_b64, filename)
 
-            # Create activity reminder for review
-            self._create_review_activity(invoice, vendor)
+            # Step 5: Post processing summary to chatter
+            self._post_processing_summary(invoice, match_summary, products_needing_review)
 
-            _logger.info(f"Created vendor bill {invoice.name} for {vendor.name} with review activity")
+            # Step 6: Create activity reminder for review if needed
+            needs_review = (
+                len(products_needing_review) > 0 or
+                match_summary.get('placeholders_created', 0) > 0 or
+                match_summary.get('fuzzy_review_matches', 0) > 0
+            )
 
-            return {
-                'success': True,
-                'invoice_id': invoice.id,
-                'invoice_name': invoice.name,
-                'vendor_name': vendor.name,
-                'total': invoice.amount_total,
-                'currency': invoice.currency_id.name,
-                'message': f'Successfully created vendor bill {invoice.name} for {vendor.name}. Review activity has been scheduled.'
-            }
+            if needs_review:
+                self._create_enhanced_review_activity(invoice, vendor, products_needing_review, match_summary)
+                result['warnings'].append(f"{len(products_needing_review)} products require manual review")
+
+            # Step 7: Determine success status
+            if products_needing_review:
+                result['partial_success'] = True
+                result['success'] = True
+            else:
+                result['success'] = True
+
+            # Build success message
+            result['message'] = self._build_success_message(result, match_summary)
+
+            _logger.info(f"[PDFProcessor] Created vendor bill {invoice.name} for {vendor.name}")
+
+            return result
 
         except Exception as e:
-            _logger.exception("Error creating vendor bill from PDF")
-            return {
-                'success': False,
-                'error': str(e)
+            _logger.exception("[PDFProcessor] Error creating vendor bill from PDF")
+            result['errors'].append(str(e))
+            result['message'] = f"❌ Error creating invoice: {str(e)}"
+            return result
+
+    def _build_success_message(self, result: Dict, match_summary: Dict) -> str:
+        """Build a user-friendly success message"""
+        lines = []
+
+        if result['partial_success']:
+            lines.append(f"⚠️ **Invoice created with items needing review**")
+        else:
+            lines.append(f"✅ **Invoice created successfully**")
+
+        lines.append(f"")
+        lines.append(f"📄 **Invoice:** {result['invoice_name']}")
+
+        # Show vendor info with creation status
+        if result.get('vendor_created'):
+            lines.append(f"🏢 **Vendor:** {result['vendor_name']} ⚠️ (NEW - auto-created, needs review)")
+        else:
+            lines.append(f"🏢 **Vendor:** {result['vendor_name']} ✅ (matched)")
+
+        lines.append(f"💰 **Total:** {result['currency']} {result['total']:,.2f}")
+
+        # Matching summary
+        lines.append(f"")
+        lines.append(f"📊 **Product Matching Summary:**")
+        lines.append(f"  • Total lines: {match_summary.get('total_lines', 0)}")
+        if match_summary.get('exact_matches', 0) > 0:
+            lines.append(f"  • ✅ Exact matches: {match_summary['exact_matches']}")
+        if match_summary.get('supplier_matches', 0) > 0:
+            lines.append(f"  • ✅ Supplier mappings: {match_summary['supplier_matches']}")
+        if match_summary.get('fuzzy_auto_matches', 0) > 0:
+            lines.append(f"  • ✅ Auto fuzzy matches: {match_summary['fuzzy_auto_matches']}")
+        if match_summary.get('ai_matches', 0) > 0:
+            lines.append(f"  • ✅ AI matches: {match_summary['ai_matches']}")
+        if match_summary.get('fuzzy_review_matches', 0) > 0:
+            lines.append(f"  • ⚠️ Fuzzy (needs review): {match_summary['fuzzy_review_matches']}")
+        if match_summary.get('placeholders_created', 0) > 0:
+            lines.append(f"  • ⚠️ Placeholders created: {match_summary['placeholders_created']}")
+
+        if result['products_needing_review']:
+            lines.append(f"")
+            lines.append(f"⚠️ **Products needing review ({len(result['products_needing_review'])}):**")
+            for idx, prod in enumerate(result['products_needing_review'][:5], 1):
+                lines.append(f"  {idx}. {prod['original_description'][:50]}...")
+            if len(result['products_needing_review']) > 5:
+                lines.append(f"  ... and {len(result['products_needing_review']) - 5} more")
+
+        lines.append(f"")
+        lines.append(f"📝 A review activity has been scheduled for this invoice.")
+
+        return "\n".join(lines)
+
+    def _post_processing_summary(self, invoice, match_summary: Dict, products_needing_review: List):
+        """Post a processing summary to the invoice chatter"""
+        try:
+            # Build HTML message for chatter
+            html_parts = [
+                "<h3>🤖 AI Invoice Processing Summary</h3>",
+                "<p><strong>Product Matching Results:</strong></p>",
+                "<ul>",
+                f"<li>Total line items: {match_summary.get('total_lines', 0)}</li>",
+            ]
+
+            if match_summary.get('exact_matches', 0) > 0:
+                html_parts.append(f"<li>✅ Exact matches: {match_summary['exact_matches']}</li>")
+            if match_summary.get('supplier_matches', 0) > 0:
+                html_parts.append(f"<li>✅ Supplier mapping matches: {match_summary['supplier_matches']}</li>")
+            if match_summary.get('fuzzy_auto_matches', 0) > 0:
+                html_parts.append(f"<li>✅ High-confidence fuzzy matches: {match_summary['fuzzy_auto_matches']}</li>")
+            if match_summary.get('ai_matches', 0) > 0:
+                html_parts.append(f"<li>✅ AI semantic matches: {match_summary['ai_matches']}</li>")
+            if match_summary.get('fuzzy_review_matches', 0) > 0:
+                html_parts.append(f"<li>⚠️ Low-confidence fuzzy matches (review needed): {match_summary['fuzzy_review_matches']}</li>")
+            if match_summary.get('placeholders_created', 0) > 0:
+                html_parts.append(f"<li>⚠️ Placeholder products created (review needed): {match_summary['placeholders_created']}</li>")
+
+            html_parts.append("</ul>")
+
+            if products_needing_review:
+                html_parts.extend([
+                    "<p><strong>⚠️ Products Requiring Review:</strong></p>",
+                    "<table style='border-collapse: collapse; width: 100%;'>",
+                    "<tr style='background: #f5f5f5;'>",
+                    "<th style='border: 1px solid #ddd; padding: 8px;'>Original Description</th>",
+                    "<th style='border: 1px solid #ddd; padding: 8px;'>Matched Product</th>",
+                    "<th style='border: 1px solid #ddd; padding: 8px;'>Match Type</th>",
+                    "<th style='border: 1px solid #ddd; padding: 8px;'>Confidence</th>",
+                    "</tr>",
+                ])
+
+                for prod in products_needing_review[:10]:
+                    confidence_pct = f"{prod['confidence'] * 100:.0f}%" if prod['confidence'] else "N/A"
+                    html_parts.append(
+                        f"<tr>"
+                        f"<td style='border: 1px solid #ddd; padding: 8px;'>{prod['original_description'][:50]}</td>"
+                        f"<td style='border: 1px solid #ddd; padding: 8px;'>{prod['product_name'][:50]}</td>"
+                        f"<td style='border: 1px solid #ddd; padding: 8px;'>{prod['match_type']}</td>"
+                        f"<td style='border: 1px solid #ddd; padding: 8px;'>{confidence_pct}</td>"
+                        f"</tr>"
+                    )
+
+                if len(products_needing_review) > 10:
+                    html_parts.append(
+                        f"<tr><td colspan='4' style='border: 1px solid #ddd; padding: 8px; text-align: center;'>"
+                        f"... and {len(products_needing_review) - 10} more items</td></tr>"
+                    )
+
+                html_parts.append("</table>")
+
+            html_parts.append("<p><em>This invoice was automatically created from PDF. Please review before confirming.</em></p>")
+
+            # Post to chatter
+            invoice.message_post(
+                body="".join(html_parts),
+                message_type='comment',
+                subtype_xmlid='mail.mt_note',
+            )
+
+        except Exception as e:
+            _logger.warning(f"[PDFProcessor] Failed to post processing summary: {e}")
+
+    def _create_enhanced_review_activity(self, invoice, vendor, products_needing_review: List, match_summary: Dict):
+        """Create an enhanced activity reminder with detailed review checklist"""
+        try:
+            Activity = self.env['mail.activity']
+            ActivityType = self.env['mail.activity.type']
+
+            # Find or create "To Do" activity type
+            todo_type = ActivityType.search([
+                '|',
+                ('name', '=', 'To Do'),
+                ('name', 'ilike', 'todo')
+            ], limit=1)
+
+            if not todo_type:
+                todo_type = ActivityType.search([
+                    '|', '|',
+                    ('name', 'ilike', 'review'),
+                    ('name', 'ilike', 'follow'),
+                    ('name', 'ilike', 'call')
+                ], limit=1)
+
+            if not todo_type:
+                _logger.warning("[PDFProcessor] No suitable activity type found")
+                return
+
+            due_date = date.today() + timedelta(days=1)
+
+            # Build detailed note
+            note_parts = [
+                f"<h4>🤖 Auto-Generated Invoice Review Required</h4>",
+                f"<p><strong>Invoice:</strong> {invoice.name}</p>",
+                f"<p><strong>Vendor:</strong> {vendor.name}</p>",
+                f"<p><strong>Amount:</strong> {invoice.currency_id.symbol}{invoice.amount_total:,.2f}</p>",
+            ]
+
+            if products_needing_review:
+                note_parts.append(f"<h5>⚠️ Products Needing Review ({len(products_needing_review)}):</h5>")
+                note_parts.append("<ul>")
+                for prod in products_needing_review[:5]:
+                    note_parts.append(
+                        f"<li><strong>{prod['original_description'][:40]}</strong> → "
+                        f"matched to '{prod['product_name'][:30]}' ({prod['match_type']})</li>"
+                    )
+                if len(products_needing_review) > 5:
+                    note_parts.append(f"<li>...and {len(products_needing_review) - 5} more</li>")
+                note_parts.append("</ul>")
+
+            note_parts.extend([
+                "<h5>✅ Review Checklist:</h5>",
+                "<ul>",
+                "<li>☐ Verify vendor is correct</li>",
+                "<li>☐ Check product mappings are accurate</li>",
+                "<li>☐ Confirm quantities and prices</li>",
+                "<li>☐ Verify GL account assignments</li>",
+                "<li>☐ Check tax calculations</li>",
+            ])
+
+            if match_summary.get('placeholders_created', 0) > 0:
+                note_parts.append(
+                    f"<li>☐ Map {match_summary['placeholders_created']} placeholder products to real products</li>"
+                )
+
+            note_parts.extend([
+                "</ul>",
+                "<p><em>After review, confirm the invoice or delete and re-process if needed.</em></p>",
+            ])
+
+            # Get the ir.model record for account.move (required for res_model_id)
+            IrModel = self.env['ir.model']
+            account_move_model = IrModel.sudo().search([('model', '=', 'account.move')], limit=1)
+
+            if not account_move_model:
+                _logger.warning("[PDFProcessor] Could not find ir.model for account.move")
+                return
+
+            activity_vals = {
+                'activity_type_id': todo_type.id,
+                'summary': f'Review AI Invoice: {invoice.name} ({len(products_needing_review)} items to check)',
+                'note': "".join(note_parts),
+                'res_id': invoice.id,
+                'res_model_id': account_move_model.id,  # Use res_model_id instead of res_model
+                'user_id': self.env.user.id,
+                'date_deadline': due_date,
             }
 
-    def _find_or_create_vendor(self, invoice_data: Dict):
-        """Find existing vendor or create new one with enhanced search"""
-        Partner = self.env['res.partner']
+            Activity.create(activity_vals)
+            _logger.info(f"[PDFProcessor] Created enhanced review activity for invoice {invoice.name}")
 
+        except Exception as e:
+            _logger.warning(f"[PDFProcessor] Failed to create review activity: {e}")
+
+    def _find_or_create_vendor(self, invoice_data: Dict, create_if_missing: bool = True) -> Tuple[Any, str, bool]:
+        """
+        Find existing vendor or create new one.
+
+        Args:
+            invoice_data: Parsed invoice data
+            create_if_missing: If True, create vendor when not found
+
+        Returns:
+            Tuple of (partner_record, match_type, was_created)
+            - was_created: True if vendor was auto-created (needs review)
+        """
         vendor_name = invoice_data.get('vendor_name', '').strip()
         vendor_vat = invoice_data.get('vendor_vat', '').strip() if invoice_data.get('vendor_vat') else None
-        vendor_email = invoice_data.get('vendor_email', '').strip() if invoice_data.get('vendor_email') else None
 
-        _logger.info(f"Searching for vendor: name='{vendor_name}', vat='{vendor_vat}', email='{vendor_email}'")
+        _logger.info(f"[PDFProcessor] Finding vendor: name='{vendor_name}', vat='{vendor_vat}'")
 
-        # Enhanced search strategy
-        vendor = None
-        
-        # 1. First try exact VAT match (most reliable)
-        if vendor_vat:
-            vendor = Partner.search([
-                ('vat', '=', vendor_vat),
-                ('supplier_rank', '>', 0)  # Only suppliers
-            ], limit=1)
-            if vendor:
-                _logger.info(f"Found vendor by VAT: {vendor.name}")
-                return vendor
+        matcher = PartnerMatcher(self.env)
 
-        # 2. Try email match (also quite reliable)
-        if vendor_email:
-            vendor = Partner.search([
-                ('email', '=', vendor_email),
-                ('supplier_rank', '>', 0)
-            ], limit=1)
-            if vendor:
-                _logger.info(f"Found vendor by email: {vendor.name}")
-                return vendor
-
-        # 3. Try exact name match
-        vendor = Partner.search([
-            ('name', '=', vendor_name),
-            ('supplier_rank', '>', 0)
-        ], limit=1)
-        if vendor:
-            _logger.info(f"Found vendor by exact name: {vendor.name}")
-            return vendor
-
-        # 4. Try fuzzy name match with different variations
-        name_variations = [
+        # Find or create vendor
+        partner, match_type, was_created = matcher.find_partner(
             vendor_name,
-            vendor_name.upper(),
-            vendor_name.lower(),
-            vendor_name.title(),
-        ]
-        
-        for name_var in name_variations:
-            vendor = Partner.search([
-                ('name', 'ilike', name_var),
-                ('supplier_rank', '>', 0)
-            ], limit=1)
-            if vendor:
-                _logger.info(f"Found vendor by fuzzy name match: {vendor.name} (matched '{name_var}')")
-                return vendor
+            vendor_vat,
+            create_if_missing=create_if_missing,
+            invoice_data=invoice_data
+        )
 
-        # 5. No vendor found - create new one
-        _logger.info(f"No existing vendor found. Creating new vendor: {vendor_name}")
-        
-        vendor_vals = {
-            'name': vendor_name,
-            'supplier_rank': 1,
-            'customer_rank': 0,  # Not a customer by default
-            'is_company': True,
-            'category_id': [(6, 0, [])],  # Empty categories initially
+        _logger.info(f"[PDFProcessor] Vendor result: {partner.name} via {match_type}, created={was_created}")
+        return partner, match_type, was_created
+
+    def _create_invoice_lines(self, invoice_data: Dict, vendor_id: int = None) -> Dict:
+        """
+        Create invoice lines using multi-tier product matching.
+
+        Args:
+            invoice_data: Parsed invoice data
+            vendor_id: Vendor partner ID for supplier mapping lookup
+
+        Returns:
+            Dict with:
+                - lines: List of (0, 0, vals) tuples for invoice creation
+                - products_needing_review: List of products that need manual review
+                - match_summary: Summary of matching results
+        """
+        invoice_lines = []
+        products_needing_review = []
+        match_summary = {
+            'total_lines': 0,
+            'exact_matches': 0,
+            'supplier_matches': 0,
+            'fuzzy_auto_matches': 0,
+            'fuzzy_review_matches': 0,
+            'ai_matches': 0,
+            'placeholders_created': 0,
         }
 
-        if vendor_vat:
-            vendor_vals['vat'] = vendor_vat
-
-        if vendor_email:
-            vendor_vals['email'] = vendor_email
-
-        if invoice_data.get('vendor_phone'):
-            vendor_vals['phone'] = invoice_data['vendor_phone']
-
-        # Add default supplier category if available
-        SupplierCategory = self.env['res.partner.category']
-        supplier_cat = SupplierCategory.search([('name', 'ilike', 'supplier')], limit=1)
-        if supplier_cat:
-            vendor_vals['category_id'] = [(6, 0, [supplier_cat.id])]
-
-        vendor = Partner.create(vendor_vals)
-        _logger.info(f"Created new vendor: {vendor.name} (ID: {vendor.id})")
-        
-        return vendor
-
-    def _create_invoice_lines(self, invoice_data: Dict):
-        """Create invoice lines from parsed data with automatic product creation"""
-        Product = self.env['product.product']
-        ProductCategory = self.env['product.category']
-        invoice_lines = []
+        product_matcher = ProductMatcher(self.env)
 
         for line_data in invoice_data.get('lines', []):
             description = line_data.get('description', '').strip()
@@ -597,10 +1352,43 @@ Invoice text:
             if not description:
                 continue
 
-            _logger.info(f"Processing line item: {description}")
+            match_summary['total_lines'] += 1
+            _logger.info(f"[PDFProcessor] Processing line item: {description}")
 
-            # Enhanced product search
-            product = self._find_or_create_product(description)
+            # Use multi-tier product matching
+            match_result = product_matcher.match_product(
+                line_description=description,
+                vendor_id=vendor_id,
+                line_data=line_data
+            )
+
+            product = match_result['product']
+            match_type = match_result['match_type']
+
+            # Track match types for summary
+            if match_type == 'exact':
+                match_summary['exact_matches'] += 1
+            elif match_type == 'supplier_mapping':
+                match_summary['supplier_matches'] += 1
+            elif match_type == 'fuzzy_auto':
+                match_summary['fuzzy_auto_matches'] += 1
+            elif match_type == 'fuzzy_review':
+                match_summary['fuzzy_review_matches'] += 1
+            elif match_type == 'ai_semantic':
+                match_summary['ai_matches'] += 1
+            elif match_type == 'placeholder':
+                match_summary['placeholders_created'] += 1
+
+            # Track products needing review
+            if match_result['needs_review']:
+                products_needing_review.append({
+                    'product_id': product.id if product else None,
+                    'product_name': product.name if product else description,
+                    'original_description': description,
+                    'match_type': match_type,
+                    'confidence': match_result['confidence'],
+                    'message': match_result['message'],
+                })
 
             # Create line values
             line_vals = {
@@ -615,201 +1403,15 @@ Invoice text:
                 if line_vals['price_unit'] > 0:
                     if not product.standard_price or product.standard_price == 0:
                         product.standard_price = line_vals['price_unit']
-                        _logger.info(f"Updated product {product.name} cost price to {line_vals['price_unit']}")
+                        _logger.info(f"[PDFProcessor] Updated product {product.name} cost price to {line_vals['price_unit']}")
 
             invoice_lines.append((0, 0, line_vals))
 
-        return invoice_lines
-
-    def _find_or_create_product(self, description: str):
-        """Find existing product or create new one based on description"""
-        Product = self.env['product.product']
-        ProductCategory = self.env['product.category']
-        
-        # 1. Try exact name match
-        product = Product.search([('name', '=', description)], limit=1)
-        if product:
-            _logger.info(f"Found product by exact name: {product.name}")
-            return product
-
-        # 2. Try fuzzy search with variations
-        search_terms = [
-            description,
-            description.lower(),
-            description.title(),
-            description.upper(),
-        ]
-        
-        for term in search_terms:
-            # Search by name
-            product = Product.search([('name', 'ilike', term)], limit=1)
-            if product:
-                _logger.info(f"Found product by fuzzy name: {product.name} (searched: {term})")
-                return product
-                
-            # Search by default_code (internal reference)
-            product = Product.search([('default_code', 'ilike', term)], limit=1)
-            if product:
-                _logger.info(f"Found product by reference: {product.name} (searched: {term})")
-                return product
-
-        # 3. Look for generic expense/service product as fallback
-        fallback_products = Product.search([
-            '|', '|', '|',
-            ('default_code', '=', 'EXP'),
-            ('name', '=', 'Generic Expense'),
-            ('name', '=', 'Miscellaneous'),
-            ('name', 'ilike', 'expense')
-        ], limit=1)
-        
-        if fallback_products:
-            _logger.info(f"Using fallback product: {fallback_products[0].name}")
-            return fallback_products[0]
-
-        # 4. Create new product
-        _logger.info(f"Creating new product: {description}")
-        
-        # Determine category based on keywords
-        category_name = self._guess_product_category(description)
-        category = ProductCategory.search([('name', 'ilike', category_name)], limit=1)
-        
-        if not category:
-            # Create category if it doesn't exist
-            category = ProductCategory.create({
-                'name': category_name,
-                'parent_id': False,
-            })
-            _logger.info(f"Created new category: {category_name}")
-
-        # Create product
-        product_vals = {
-            'name': description,
-            'type': 'service',  # Default to service for invoice items
-            'purchase_ok': True,
-            'sale_ok': False,  # Usually vendor bill items are not for resale
-            'categ_id': category.id if category else False,
-            'default_code': self._generate_product_code(description),
+        return {
+            'lines': invoice_lines,
+            'products_needing_review': products_needing_review,
+            'match_summary': match_summary,
         }
-
-        try:
-            product = Product.create(product_vals)
-            _logger.info(f"Created new product: {product.name} (ID: {product.id}) in category: {category_name}")
-            return product
-        except Exception as e:
-            _logger.warning(f"Failed to create product '{description}': {e}")
-            return False
-
-    def _guess_product_category(self, description: str) -> str:
-        """Guess product category based on description keywords"""
-        description_lower = description.lower()
-        
-        # Define keyword mappings
-        category_keywords = {
-            'Office Supplies': ['paper', 'pen', 'pencil', 'office', 'supplies', 'stationery', 'folder'],
-            'Software & IT': ['software', 'license', 'subscription', 'hosting', 'domain', 'cloud', 'saas'],
-            'Marketing': ['marketing', 'advertising', 'promotion', 'design', 'campaign', 'social media'],
-            'Travel & Transport': ['travel', 'flight', 'hotel', 'taxi', 'transport', 'fuel', 'mileage'],
-            'Professional Services': ['consulting', 'legal', 'accounting', 'professional', 'service', 'advisory'],
-            'Utilities': ['electricity', 'water', 'gas', 'internet', 'phone', 'utility', 'telecom'],
-            'Maintenance': ['repair', 'maintenance', 'cleaning', 'service', 'fix'],
-            'Equipment': ['equipment', 'hardware', 'machine', 'tool', 'device'],
-            'Food & Beverages': ['food', 'coffee', 'lunch', 'catering', 'beverage', 'meal'],
-        }
-        
-        for category, keywords in category_keywords.items():
-            if any(keyword in description_lower for keyword in keywords):
-                return category
-        
-        # Default category
-        return 'General Expenses'
-
-    def _generate_product_code(self, description: str) -> str:
-        """Generate a product code from description"""
-        # Take first 3 words, first 2 letters each, uppercase
-        words = description.split()[:3]
-        code_parts = []
-        
-        for word in words:
-            clean_word = ''.join(c for c in word if c.isalnum())
-            if clean_word:
-                code_parts.append(clean_word[:2].upper())
-        
-        if not code_parts:
-            code_parts = ['GE']  # Generic Expense
-            
-        base_code = ''.join(code_parts)
-        
-        # Ensure uniqueness
-        Product = self.env['product.product']
-        counter = 1
-        final_code = base_code
-        
-        while Product.search([('default_code', '=', final_code)], limit=1):
-            final_code = f"{base_code}{counter:02d}"
-            counter += 1
-        
-        return final_code
-
-    def _create_review_activity(self, invoice, vendor):
-        """Create an activity reminder to review the auto-created invoice"""
-        try:
-            Activity = self.env['mail.activity']
-            ActivityType = self.env['mail.activity.type']
-            
-            # Find or create "To Do" activity type
-            todo_type = ActivityType.search([
-                '|',
-                ('name', '=', 'To Do'),
-                ('name', 'ilike', 'todo')
-            ], limit=1)
-            
-            if not todo_type:
-                # Try other common activity types
-                todo_type = ActivityType.search([
-                    '|', '|',
-                    ('name', 'ilike', 'review'),
-                    ('name', 'ilike', 'follow'),
-                    ('name', 'ilike', 'call')
-                ], limit=1)
-            
-            if not todo_type:
-                _logger.warning("No suitable activity type found, skipping activity creation")
-                return
-            
-            # Calculate due date (1 day from now)
-            from datetime import date, timedelta
-            due_date = date.today() + timedelta(days=1)
-            
-            # Create activity
-            activity_vals = {
-                'activity_type_id': todo_type.id,
-                'summary': f'Review Auto-Generated Invoice: {invoice.name}',
-                'note': f'''<p><strong>Auto-generated invoice requires review:</strong></p>
-<ul>
-<li><strong>Vendor:</strong> {vendor.name}</li>
-<li><strong>Invoice:</strong> {invoice.name}</li>
-<li><strong>Amount:</strong> {invoice.currency_id.symbol}{invoice.amount_total:,.2f}</li>
-<li><strong>Reference:</strong> {invoice.ref or 'N/A'}</li>
-</ul>
-<p><strong>Please verify:</strong></p>
-<ul>
-<li>✅ Vendor details are correct</li>
-<li>✅ Line items and amounts are accurate</li>
-<li>✅ GL accounts are properly assigned</li>
-<li>✅ Tax calculations are correct</li>
-</ul>
-<p><em>This invoice was automatically created from PDF using AI extraction.</em></p>''',
-                'res_id': invoice.id,
-                'res_model': 'account.move',
-                'user_id': self.env.user.id,
-                'date_deadline': due_date,
-            }
-            
-            activity = Activity.create(activity_vals)
-            _logger.info(f"Created review activity {activity.id} for invoice {invoice.name}")
-            
-        except Exception as e:
-            _logger.warning(f"Failed to create review activity: {e}")
 
     def _attach_pdf_to_invoice(self, invoice, pdf_content_b64: str, filename: str):
         """Attach PDF file to invoice"""
