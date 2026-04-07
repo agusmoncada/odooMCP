@@ -24,6 +24,7 @@
     'depends': ['base', 'web', 'mail'],
     'data': [
         'security/ir.model.access.csv',
+        'security/ai_chat_rules.xml',
         'views/ai_chat_views.xml',
         'views/res_config_settings_views.xml',
         'views/ai_chat_menu.xml',

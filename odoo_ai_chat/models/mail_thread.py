@@ -5,6 +5,7 @@ import threading
 import json
 
 from odoo import models, api
+from odoo.tools import html_escape, plaintext2html
 
 _logger = logging.getLogger(__name__)
 
@@ -234,17 +235,18 @@ class MailThread(models.AbstractModel):
                 if response_content:
                     # Add @ mention if we know who mentioned us
                     partner_ids = []
+                    safe_body = plaintext2html(html_escape(response_content)) if response_content else ''
                     if mentioning_user_partner:
                         partner_ids = [mentioning_user_partner.id]
                         # Format response with @ mention using Odoo's chatter mention format
                         mention_html = f'<a href="#" class="o_mail_redirect" data-oe-id="{mentioning_user_partner.id}" data-oe-model="res.partner">@{mentioning_user_partner.name}</a> '
-                        response_content = mention_html + response_content
+                        safe_body = mention_html + plaintext2html(html_escape(response_content))
 
                     record.with_context(
                         mail_create_nosubscribe=True,
                         mail_channel_noautofollow=True
                     ).message_post(
-                        body=response_content,
+                        body=safe_body,
                         author_id=ai_bot.id,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',

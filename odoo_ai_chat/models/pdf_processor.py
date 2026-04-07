@@ -503,6 +503,7 @@ class PDFInvoiceProcessor:
         try:
             # Extract text from PDF using PyPDF2
             text = self._extract_text(pdf_content)
+            extraction_method = 'pypdf2'
 
             # Log what we extracted for debugging
             text_length = len(text.strip()) if text else 0
@@ -523,6 +524,7 @@ class PDFInvoiceProcessor:
                         if ocr_length > 50:  # Good enough text found
                             text = ocr_text
                             text_length = ocr_length
+                            extraction_method = 'tesseract'
                             _logger.info("Using traditional OCR text")
                         else:
                             _logger.info("Traditional OCR didn't extract enough text, trying AI OCR...")
@@ -531,6 +533,7 @@ class PDFInvoiceProcessor:
                             if ai_ocr_text and len(ai_ocr_text.strip()) > ocr_length:
                                 text = ai_ocr_text
                                 text_length = len(ai_ocr_text.strip())
+                                extraction_method = 'vision_ai'
                                 _logger.info("Using AI OCR text (premium)")
                 else:
                     _logger.info("Traditional OCR not available, trying AI OCR...")
@@ -539,6 +542,7 @@ class PDFInvoiceProcessor:
                     if ai_ocr_text:
                         text = ai_ocr_text
                         text_length = len(ai_ocr_text.strip())
+                        extraction_method = 'vision_ai'
                         _logger.info("Using AI OCR text (premium)")
 
             # Final check for sufficient text
@@ -561,7 +565,8 @@ class PDFInvoiceProcessor:
                 'success': True,
                 'data': invoice_data,
                 'raw_text': text[:1000],  # First 1000 chars for reference
-                'filename': filename
+                'filename': filename,
+                'ocr_method': extraction_method,
             }
 
         except Exception as e:
@@ -628,8 +633,9 @@ class PDFInvoiceProcessor:
         try:
             _logger.info("Converting PDF to images for OCR processing...")
             
-            # Convert PDF to images
-            images = convert_from_bytes(pdf_content, dpi=300)  # High DPI for better OCR accuracy
+            # Convert PDF to images (high DPI improves OCR on small fonts)
+            dpi = int(self.env['ir.config_parameter'].sudo().get_param('odoo_ai_chat.ocr_dpi', '300'))
+            images = convert_from_bytes(pdf_content, dpi=dpi)
             _logger.info(f"Converted PDF to {len(images)} images")
             
             text_parts = []
@@ -637,12 +643,20 @@ class PDFInvoiceProcessor:
             for page_num, image in enumerate(images, 1):
                 _logger.info(f"OCR processing page {page_num}...")
                 
-                # Configure Tesseract for better invoice recognition
-                custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,@#$%()-:/ '
+                # Preprocess to improve OCR quality (contrast/binarize/scale).
+                processed = self._preprocess_image_for_ocr(image)
+
+                # Configure Tesseract for invoice-like documents.
+                # Avoid whitelists: invoices often contain symbols/accents that whitelists destroy.
+                psm = self.env['ir.config_parameter'].sudo().get_param('odoo_ai_chat.ocr_psm', '6')
+                custom_config = f'--oem 3 --psm {psm}'
+
+                # Language selection: default to eng+spa; can be overridden in config.
+                lang = self.env['ir.config_parameter'].sudo().get_param('odoo_ai_chat.ocr_lang', 'eng+spa')
                 
                 # Extract text using Tesseract
                 try:
-                    page_text = pytesseract.image_to_string(image, config=custom_config)
+                    page_text = pytesseract.image_to_string(processed, lang=lang, config=custom_config)
                     
                     if page_text and page_text.strip():
                         text_parts.append(page_text.strip())
@@ -661,6 +675,27 @@ class PDFInvoiceProcessor:
             _logger.exception("Error during OCR processing")
             return ""
 
+    def _preprocess_image_for_ocr(self, image):
+        """Preprocess PIL image for better OCR (grayscale, contrast, binarize, enlarge)."""
+        try:
+            from PIL import ImageEnhance, ImageOps
+
+            img = image.convert('RGB')
+            img = ImageOps.grayscale(img)
+            img = ImageOps.autocontrast(img)
+            img = ImageEnhance.Contrast(img).enhance(1.6)
+
+            w, h = img.size
+            if max(w, h) < 2000:
+                img = img.resize((w * 2, h * 2), resample=3)  # 3 = BICUBIC
+
+            threshold = int(self.env['ir.config_parameter'].sudo().get_param('odoo_ai_chat.ocr_threshold', '170'))
+            img = img.point(lambda p: 255 if p > threshold else 0, mode='1')
+            return img
+        except Exception as e:
+            _logger.debug(f"OCR preprocessing failed, using original image: {e}")
+            return image
+
     def _extract_text_ai_ocr(self, pdf_content: bytes) -> str:
         """Extract text using AI vision models (premium but highly accurate)"""
         try:
@@ -671,7 +706,6 @@ class PDFInvoiceProcessor:
                 _logger.warning("pdf2image not available for AI OCR")
                 return ""
             
-            from pdf2image import convert_from_bytes
             images = convert_from_bytes(pdf_content, dpi=200)  # Lower DPI for AI (faster)
             
             if not images:
@@ -685,11 +719,9 @@ class PDFInvoiceProcessor:
             
             for page_num in range(pages_to_process):
                 try:
-                    image = images[page_num]
+                    image = self._preprocess_image_for_ocr(images[page_num])
                     
                     # Convert PIL Image to base64 for AI
-                    import io
-                    import base64
                     buffer = io.BytesIO()
                     image.save(buffer, format='PNG')
                     image_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
@@ -703,27 +735,30 @@ class PDFInvoiceProcessor:
                     from .ai_provider import OpenRouterProvider
                     ai_provider = OpenRouterProvider(
                         api_key=config['api_key'],
-                        model="anthropic/claude-3-haiku",  # Good for vision, cost-effective
+                        model=self.env['ir.config_parameter'].sudo().get_param(
+                            'odoo_ai_chat.vision_ocr_model',
+                            'openai/gpt-4o-mini'
+                        ),
                         site_url=config['site_url'],
                         site_name=config['site_name']
                     )
                     
-                    # Vision prompt for OCR
+                    # Vision prompt for OCR (OpenAI-compatible; OpenRouter normalizes per-model).
                     messages = [
                         {
                             'role': 'user',
                             'content': [
                                 {
                                     'type': 'text',
-                                    'text': 'Extract all text from this image precisely. Return only the raw text, no formatting or explanations. Pay special attention to invoice numbers, dates, company names, amounts, and line items.'
+                                    'text': (
+                                        "Extract all text from this invoice image as accurately as possible.\n"
+                                        "Return ONLY the raw text (no markdown, no JSON, no explanations).\n"
+                                        "Preserve line breaks. Pay special attention to invoice numbers, dates, VAT/Tax IDs, totals, and line items."
+                                    )
                                 },
                                 {
-                                    'type': 'image',
-                                    'source': {
-                                        'type': 'base64',
-                                        'media_type': 'image/png',
-                                        'data': image_b64
-                                    }
+                                    'type': 'image_url',
+                                    'image_url': {'url': f'data:image/png;base64,{image_b64}'}
                                 }
                             ]
                         }

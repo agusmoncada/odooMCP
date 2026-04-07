@@ -336,6 +336,10 @@ export class AIChatWidget extends Component {
             const formData = new FormData();
             formData.append('file', file);
             formData.append('session_id', this.state.currentSessionId || '');
+            // Required when controller route has csrf enabled
+            if (window.odoo && window.odoo.csrf_token) {
+                formData.append('csrf_token', window.odoo.csrf_token);
+            }
 
             const response = await fetch('/ai_chat/upload_pdf', {
                 method: 'POST',

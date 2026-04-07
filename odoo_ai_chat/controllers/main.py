@@ -577,7 +577,7 @@ Only use a different language if the user explicitly requests it.
             _logger.exception("Error in new_session")
             return {'success': False, 'error': str(e)}
 
-    @http.route('/ai_chat/upload_pdf', type='http', auth='user', methods=['POST'], csrf=False)
+    @http.route('/ai_chat/upload_pdf', type='http', auth='user', methods=['POST'], csrf=True)
     def upload_pdf(self, **kwargs):
         """Handle PDF file upload and processing"""
         try:
@@ -658,6 +658,20 @@ Only use a different language if the user explicitly requests it.
 
             if not attachment.exists():
                 return {'success': False, 'error': 'Attachment not found'}
+
+            # Security: ensure the user can only process their own uploaded temp PDFs.
+            # We restrict by:
+            # - attachment belongs to an ai.chat.session owned by the user, OR
+            # - attachment was created by the current user (fallback for older/orphan uploads).
+            can_process = False
+            if attachment.res_model == 'ai.chat.session' and attachment.res_id:
+                session = request.env['ai.chat.session'].browse(attachment.res_id)
+                if session.exists() and session.user_id == request.env.user:
+                    can_process = True
+            if not can_process and attachment.create_uid == request.env.user:
+                can_process = True
+            if not can_process:
+                return {'success': False, 'error': 'Access denied for this attachment'}
 
             # Try to access attachment data with proper error handling
             try:
@@ -748,76 +762,42 @@ Only use a different language if the user explicitly requests it.
             Dict with success status
         """
         try:
-            _logger.info(f"[AI Chat Controller] update_channel_context endpoint called")
-            _logger.info(f"[AI Chat Controller] User: {request.env.user.name} (ID: {request.env.uid})")
-            
-            # Get request data in different ways
-            jsonrequest = getattr(request, 'jsonrequest', {})
+            # Avoid logging raw request bodies/kwargs/context: it may contain sensitive data.
+            jsonrequest = getattr(request, 'jsonrequest', {}) or {}
             httprequest = getattr(request, 'httprequest', None)
-
-            # More detailed debugging
-            _logger.info(f"[AI Chat Controller] jsonrequest: {jsonrequest}")
-            _logger.info(f"[AI Chat Controller] Raw kwargs received: {kwargs}")
-            _logger.info(f"[AI Chat Controller] Context parameter: {context}")
-            _logger.info(f"[AI Chat Controller] Context type: {type(context)}")
-
-            # Try to get raw request body
-            if httprequest:
-                try:
-                    raw_data = httprequest.get_data(as_text=True)
-                    _logger.info(f"[AI Chat Controller] Raw request body: {raw_data[:500] if raw_data else 'empty'}")
-                except Exception as e:
-                    _logger.info(f"[AI Chat Controller] Could not get raw body: {e}")
-
-            # Check request.params - in Odoo JSON controllers, this contains the parsed params
-            params = getattr(request, 'params', {})
-            _logger.info(f"[AI Chat Controller] request.params: {params}")
-
-            # Also check for 'params' key inside jsonrequest (JSON-RPC structure)
-            if jsonrequest and 'params' in jsonrequest:
-                _logger.info(f"[AI Chat Controller] jsonrequest['params']: {jsonrequest['params']}")
+            params = getattr(request, 'params', {}) or {}
             
             # Try to get context from different sources
             # Priority: view_context > context > kwargs > params > jsonrequest
             actual_context = view_context or context
 
-            _logger.info(f"[AI Chat Controller] view_context parameter: {view_context}")
-
             # Check kwargs first
             if not actual_context and 'view_context' in kwargs:
                 actual_context = kwargs['view_context']
-                _logger.info(f"[AI Chat Controller] Context found in kwargs['view_context']: {actual_context}")
 
             if not actual_context and 'context' in kwargs:
                 actual_context = kwargs['context']
-                _logger.info(f"[AI Chat Controller] Context found in kwargs['context']: {actual_context}")
 
             # Check request.params (where Odoo extracts JSON params to)
             if not actual_context and params:
                 if 'view_context' in params:
                     actual_context = params['view_context']
-                    _logger.info(f"[AI Chat Controller] Context found in params['view_context']: {actual_context}")
                 elif 'context' in params:
                     actual_context = params['context']
-                    _logger.info(f"[AI Chat Controller] Context found in params['context']: {actual_context}")
 
             # Check jsonrequest (raw JSON body)
             if not actual_context and jsonrequest:
                 if 'view_context' in jsonrequest:
                     actual_context = jsonrequest['view_context']
-                    _logger.info(f"[AI Chat Controller] Context found in jsonrequest['view_context']: {actual_context}")
                 elif 'context' in jsonrequest:
                     actual_context = jsonrequest['context']
-                    _logger.info(f"[AI Chat Controller] Context found in jsonrequest['context']: {actual_context}")
                 # Also check nested 'params' key (JSON-RPC format)
                 elif 'params' in jsonrequest:
                     nested_params = jsonrequest['params']
                     if 'view_context' in nested_params:
                         actual_context = nested_params['view_context']
-                        _logger.info(f"[AI Chat Controller] Context found in jsonrequest['params']['view_context']: {actual_context}")
                     elif 'context' in nested_params:
                         actual_context = nested_params['context']
-                        _logger.info(f"[AI Chat Controller] Context found in jsonrequest['params']['context']: {actual_context}")
 
             # Last resort: parse httprequest json
             if not actual_context and httprequest and hasattr(httprequest, 'json') and httprequest.json:
@@ -826,36 +806,30 @@ Only use a different language if the user explicitly requests it.
                     actual_context = json_data.get('view_context') or json_data.get('context')
                     if not actual_context and 'params' in json_data:
                         actual_context = json_data['params'].get('view_context') or json_data['params'].get('context')
-                    _logger.info(f"[AI Chat Controller] Context found in httprequest.json: {actual_context}")
                 except Exception as e:
-                    _logger.info(f"[AI Chat Controller] Could not parse httprequest.json: {e}")
+                    _logger.debug(f"[AI Chat Controller] Could not parse httprequest.json: {e}")
             
-            if not actual_context:
-                _logger.warning(f"[AI Chat Controller] No context found in any source")
-            else:
-                _logger.info(f"[AI Chat Controller] Final context: model={actual_context.get('model')}, active_id={actual_context.get('active_id')}")
+            if actual_context:
+                _logger.debug(
+                    "[AI Chat Controller] update_channel_context: model=%s active_id=%s",
+                    actual_context.get('model'),
+                    actual_context.get('active_id'),
+                )
 
             # Get or create AI channel for this user
             session_model = request.env['ai.chat.session']
             channel = session_model.get_or_create_ai_channel_for_user()
 
-            _logger.info(f"[AI Chat Controller] Got AI channel: {channel.id} ({channel.name})")
+            _logger.debug("[AI Chat Controller] Got AI channel: %s", channel.id)
 
             # Update the channel's view context
             if actual_context and actual_context.get('model') and actual_context.get('active_id'):
-                _logger.info(f"[AI Chat Controller] Valid context received, updating channel")
                 channel.update_view_context(actual_context)
                 
                 # Commit the transaction to ensure it's saved
                 request.env.cr.commit()
-                _logger.info(f"[AI Chat Controller] Context updated and committed for channel {channel.id}")
             else:
-                if not actual_context:
-                    _logger.warning("[AI Chat Controller] No context data provided")
-                elif not actual_context.get('model'):
-                    _logger.warning(f"[AI Chat Controller] Context missing model: {actual_context}")
-                elif not actual_context.get('active_id'):
-                    _logger.warning(f"[AI Chat Controller] Context missing active_id: {actual_context}")
+                _logger.debug("[AI Chat Controller] Context missing required keys (model, active_id)")
 
             return {'success': True}
 

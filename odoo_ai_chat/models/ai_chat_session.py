@@ -424,8 +424,7 @@ class AIChatSession(models.Model):
 
             messages.append(message_dict)
 
-        _logger.info(f"Returning {len(messages)} messages for API")
-        for i, msg in enumerate(messages):
-            _logger.info(f"Message[{i}]: role={msg.get('role')}, has_tool_calls={bool(msg.get('tool_calls'))}, has_tool_call_id={bool(msg.get('tool_call_id'))}, has_name={bool(msg.get('name'))}")
+        # Avoid logging message metadata at info level: can leak sensitive content/structure.
+        _logger.debug(f"Returning {len(messages)} messages for API")
 
         return messages

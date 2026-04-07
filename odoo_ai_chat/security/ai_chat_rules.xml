@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Restrict chat sessions/messages to their owner -->
+    <record id="rule_ai_chat_session_owner" model="ir.rule">
+        <field name="name">AI chat sessions: owner only</field>
+        <field name="model_id" ref="model_ai_chat_session"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+    </record>
+
+    <record id="rule_ai_chat_message_owner" model="ir.rule">
+        <field name="name">AI chat messages: owner only</field>
+        <field name="model_id" ref="model_ai_chat_message"/>
+        <field name="domain_force">[('session_id.user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+    </record>
+</odoo>
+
